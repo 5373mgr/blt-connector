@@ -1,0 +1,14 @@
+[Unit]
+Description=Load BLT Connector docker images from local tar
+Requires=docker.service
+After=docker.service
+Before=blt-connector.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=BLT_CONNECTOR_IMAGES_DIR=/opt/blt-connector/images
+ExecStart=/opt/blt-connector/scripts/load-images.sh
+
+[Install]
+WantedBy=multi-user.target

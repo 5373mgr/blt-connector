@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>BLT Connector Overlay</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent; /* OBS Browser Sourceで透過させる */
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    color: #fff;
+  }
+  #decks {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+  }
+  .deck {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 10px;
+    padding: 10px 14px;
+    max-width: 480px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  .deck.active { display: flex; }
+  .deck.master { outline: 2px solid #ffd23f; }
+  .art {
+    width: 64px;
+    height: 64px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: #222;
+    flex-shrink: 0;
+  }
+  .info { min-width: 0; flex: 1; }
+  .title {
+    font-size: 16px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .artist, .album {
+    font-size: 12px;
+    color: #ccc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .bpm { font-size: 12px; color: #9fe870; }
+  .master-badge {
+    display: none;
+    font-size: 10px;
+    font-weight: 700;
+    color: #1a1a1a;
+    background: #ffd23f;
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+  .deck.master .master-badge { display: inline-block; }
+  .progress {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: #9fe870;
+    width: 0%;
+  }
+</style>
+</head>
+<body>
+  <div id="decks">
+    <div class="deck" id="deck-1">
+      <img class="art" id="art-1">
+      <div class="info">
+        <div class="title" id="title-1"></div>
+        <div class="artist" id="artist-1"></div>
+        <div class="album" id="album-1"></div>
+        <div class="meta">
+          <span class="bpm" id="bpm-1"></span>
+          <span class="master-badge">MASTER</span>
+        </div>
+        <div class="progress"><div class="progress-bar" id="progress-1"></div></div>
+      </div>
+    </div>
+    <div class="deck" id="deck-2">
+      <img class="art" id="art-2">
+      <div class="info">
+        <div class="title" id="title-2"></div>
+        <div class="artist" id="artist-2"></div>
+        <div class="album" id="album-2"></div>
+        <div class="meta">
+          <span class="bpm" id="bpm-2"></span>
+          <span class="master-badge">MASTER</span>
+        </div>
+        <div class="progress"><div class="progress-bar" id="progress-2"></div></div>
+      </div>
+    </div>
+    <div class="deck" id="deck-3">
+      <img class="art" id="art-3">
+      <div class="info">
+        <div class="title" id="title-3"></div>
+        <div class="artist" id="artist-3"></div>
+        <div class="album" id="album-3"></div>
+        <div class="meta">
+          <span class="bpm" id="bpm-3"></span>
+          <span class="master-badge">MASTER</span>
+        </div>
+        <div class="progress"><div class="progress-bar" id="progress-3"></div></div>
+      </div>
+    </div>
+    <div class="deck" id="deck-4">
+      <img class="art" id="art-4">
+      <div class="info">
+        <div class="title" id="title-4"></div>
+        <div class="artist" id="artist-4"></div>
+        <div class="album" id="album-4"></div>
+        <div class="meta">
+          <span class="bpm" id="bpm-4"></span>
+          <span class="master-badge">MASTER</span>
+        </div>
+        <div class="progress"><div class="progress-bar" id="progress-4"></div></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const lastArtVersion = {};
+
+  function connect() {
+    const ws = new WebSocket("ws://" + location.host + "/ws");
+    ws.onmessage = (event) => {
+      try {
+        applyUpdate(JSON.parse(event.data));
+      } catch (e) {
+        console.error("failed to parse overlay update", e);
+      }
+    };
+    ws.onclose = () => setTimeout(connect, 1000);
+    ws.onerror = () => ws.close();
+  }
+
+  function applyUpdate(deck) {
+    const n = deck.playerNumber;
+    const root = document.getElementById("deck-" + n);
+    if (!root) return;
+
+    const hasTrack = deck.title && deck.title.length > 0;
+    root.classList.toggle("active", hasTrack);
+    root.classList.toggle("master", !!deck.master);
+    if (!hasTrack) return;
+
+    document.getElementById("title-" + n).textContent = deck.title || "";
+    document.getElementById("artist-" + n).textContent = deck.artist || "";
+    document.getElementById("album-" + n).textContent = deck.album || "";
+    document.getElementById("bpm-" + n).textContent = deck.bpm ? deck.bpm.toFixed(1) + " BPM" : "";
+
+    if (deck.durationMs > 0 && deck.positionMs >= 0) {
+      const pct = Math.min(100, (deck.positionMs / deck.durationMs) * 100);
+      document.getElementById("progress-" + n).style.width = pct + "%";
+    }
+
+    const artEl = document.getElementById("art-" + n);
+    if (deck.hasArt && lastArtVersion[n] !== deck.trackVersion) {
+      lastArtVersion[n] = deck.trackVersion;
+      artEl.src = "/art/deck/" + n + "?v=" + deck.trackVersion;
+    } else if (!deck.hasArt) {
+      artEl.removeAttribute("src");
+    }
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+plugins {
+    kotlin("jvm")
+    `java-library`
+}
+
+dependencies {
+    implementation("org.deepsymmetry:beat-link:7.4.0")
+    implementation("com.illposed.osc:javaosc-core:0.9")
+    implementation("org.slf4j:slf4j-simple:2.0.17")
+    // OverlayServerがNanoWSDを継承しているため公開API扱い(api)にする。
+    // gui等の利用側がOverlayServer.start()/stop()を呼ぶには親クラスの型解決が必要になるため。
+    api("org.nanohttpd:nanohttpd-websocket:2.3.1")
+    implementation("org.json:json:20250517")
+    // Win/Mac/Linux向けCarabinerバイナリを同梱し、プロセス起動・プロトコル応答パースまで面倒を見てくれる
+    implementation("org.deepsymmetry:lib-carabiner:1.2.0")
+
+    testImplementation(kotlin("test"))
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+tasks.test {
+    useJUnitPlatform()
+}

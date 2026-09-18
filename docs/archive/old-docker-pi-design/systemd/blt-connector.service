@@ -1,0 +1,16 @@
+[Unit]
+Description=BLT Connector (Beat Link Trigger + Carabiner + netconfig)
+Requires=blt-connector-load-images.service
+After=blt-connector-load-images.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/blt-connector/repo
+ExecStart=/usr/bin/docker compose up --remove-orphans
+ExecStop=/usr/bin/docker compose down
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

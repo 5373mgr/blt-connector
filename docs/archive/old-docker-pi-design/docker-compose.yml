@@ -1,0 +1,31 @@
+services:
+  netconfig:
+    build: ./netconfig
+    image: blt-connector/netconfig:latest
+    pull_policy: never
+    network_mode: host
+    volumes:
+      - network-config:/config
+    restart: unless-stopped
+
+  carabiner:
+    build: ./carabiner
+    image: blt-connector/carabiner:latest
+    pull_policy: never
+    network_mode: host
+    restart: unless-stopped
+
+  blt:
+    build: ./blt
+    image: blt-connector/blt:latest
+    pull_policy: never
+    network_mode: host
+    depends_on:
+      - carabiner
+    volumes:
+      - network-config:/config:ro
+      - ./blt/config/vj-broadcast.blt:/app/config/vj-broadcast.blt:ro
+    restart: unless-stopped
+
+volumes:
+  network-config:

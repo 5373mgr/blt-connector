@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>netconfig - NIC選択</title>
+<style>
+  body { font-family: sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+  th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.9rem; }
+  th { background: #f0f0f0; }
+  .up { color: #2a7d2a; }
+  .down { color: #999; }
+  form { margin-bottom: 1rem; }
+  label { display: inline-block; width: 8rem; }
+  select { min-width: 12rem; }
+  .msg-ok { color: #2a7d2a; }
+  .msg-error { color: #c0392b; }
+  .note { color: #666; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+  <h1>netconfig - NIC選択</h1>
+  <p class="note">CDJ側/VJ出力側で使うNICを選んで保存してください。保存後は手動でコンテナ(BLT/Carabiner)を再起動すると反映されます。</p>
+
+  {% if saved_ok %}
+    <p class="msg-ok">保存しました。反映するにはコンテナを再起動してください。</p>
+  {% endif %}
+  {% if error == "same" %}
+    <p class="msg-error">CDJ側とVJ出力側に同じインターフェースは選べません。</p>
+  {% elif error == "both" %}
+    <p class="msg-error">両方のインターフェースを選択してください。</p>
+  {% endif %}
+
+  <h2>インターフェース一覧</h2>
+  <table>
+    <tr><th>名前</th><th>MACアドレス</th><th>IPv4</th><th>状態</th></tr>
+    {% for iface in interfaces %}
+    <tr>
+      <td>{{ iface.name }}</td>
+      <td>{{ iface.mac }}</td>
+      <td>{{ iface.ipv4 }}</td>
+      <td class="{{ 'up' if iface.operstate == 'up' else 'down' }}">{{ iface.operstate }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <form method="post" action="{{ url_for('save') }}">
+    <div>
+      <label for="cdj_interface">CDJ側:</label>
+      <select name="cdj_interface" id="cdj_interface">
+        <option value="">-- 選択 --</option>
+        {% for iface in interfaces %}
+        <option value="{{ iface.name }}" {% if saved.cdj_interface == iface.name %}selected{% endif %}>
+          {{ iface.name }} ({{ iface.mac }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="vj_interface">VJ出力側:</label>
+      <select name="vj_interface" id="vj_interface">
+        <option value="">-- 選択 --</option>
+        {% for iface in interfaces %}
+        <option value="{{ iface.name }}" {% if saved.vj_interface == iface.name %}selected{% endif %}>
+          {{ iface.name }} ({{ iface.mac }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">保存</button>
+  </form>
+</body>
+</html>
