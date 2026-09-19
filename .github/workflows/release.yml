@@ -1,0 +1,106 @@
+name: Release
+
+# タグ(v*)をpushすると自動でビルド・GitHub Releaseを作成する。
+# workflow_dispatchで手動実行も可能(その場合、選択したブランチの内容を指定タグ名でリリースする)。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "リリースタグ名(例: v1.0.0)。存在しない場合は現在のブランチから新規作成される。"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  determine-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Determine release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Run tests
+        run: ./gradlew :core:test --no-daemon
+
+  build-cli:
+    needs: [determine-tag, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      # CLIは純粋なJVMアプリ(Pro DJ Link + Overlay + Ableton Linkブリッジ)で、
+      # Raspberry Pi(Linux)を含むどのJVM環境でもそのまま動く。ビルド自体はUbuntuで行う。
+      - name: Build CLI distribution
+        run: ./gradlew :cli:distZip --no-daemon
+      - name: Rename artifact with version
+        shell: bash
+        run: |
+          mkdir -p out
+          cp cli/build/distributions/cli.zip "out/blt-connector-cli-${{ needs.determine-tag.outputs.tag }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blt-connector-cli
+          path: out/*.zip
+
+  build-gui:
+    needs: [determine-tag, test]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      # GUIはJavaFX(org.openjfx.javafxplugin)がビルド実行OS向けのネイティブを自動解決するため、
+      # Windowsデスクトップ配布を想定してWindowsランナーでビルドする。
+      - name: Build GUI distribution
+        shell: cmd
+        run: gradlew.bat :gui:distZip --no-daemon
+      - name: Rename artifact with version
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item "gui/build/distributions/gui.zip" "out/blt-connector-gui-${{ needs.determine-tag.outputs.tag }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blt-connector-gui
+          path: out/*.zip
+
+  release:
+    needs: [determine-tag, build-cli, build-gui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.determine-tag.outputs.tag }}
+          name: ${{ needs.determine-tag.outputs.tag }}
+          generate_release_notes: true
+          files: artifacts/*.zip

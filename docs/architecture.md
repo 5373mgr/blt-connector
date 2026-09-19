@@ -271,6 +271,26 @@ cli/   -- coreに依存するLinux(Raspberry Pi等)向けCLI + 組み込みWeb G
 - CDJが見つからず`start()`が一度諦めると、そのままでは後からCDJの電源が入っても自動復帰しなかった
   → `Receiver.start()`内で(`stop()`が呼ばれるまで)見つかるまでリトライし続けるループに変更
 
+## リリース自動化(2026-09-19追加)
+
+`.github/workflows/release.yml`で、タグ(`v*`)をpushすると自動でCLI/GUIの配布物をビルドし、
+GitHub Releaseを作成する。`workflow_dispatch`での手動実行(タグ名を指定)にも対応。
+
+- `test`ジョブ: `:core:test`を実行するゲート(失敗するとビルド・リリースへ進まない)
+- `build-cli`: Ubuntuランナーで`:cli:distZip`。CLIは純粋なJVMアプリ(beat-link/Overlay/
+  Carabinerブリッジ)でOS非依存のため、どのランナーでビルドしても実行環境(Raspberry Pi含む)
+  では同じように動く
+- `build-gui`: Windowsランナーで`gradlew.bat :gui:distZip`。GUIは`org.openjfx.javafxplugin`が
+  ビルド実行OS向けのJavaFXネイティブを自動解決するため、Windowsデスクトップ配布を想定して
+  Windowsランナーでビルドする(Ubuntuでビルドすると誤ってLinux向けネイティブが同梱されてしまう)
+- `release`: 両方の成果物(zip)をダウンロードして`softprops/action-gh-release`でGitHub Releaseへ添付
+
+**ビルド出力先の一時ディレクトリ回避策とCIの相性(2026-09-19追加)**: ルートの`build.gradle.kts`は
+プロジェクトパスの非ASCII文字対策として`buildDir`をOSの一時ディレクトリ配下へ逃がしているが、
+この回避策はCI環境(パスは常にASCII)には不要な上、成果物の実際のパスが環境ごとに変わり
+ワークフローから見つけにくくなる。そのため`CI`環境変数(GitHub Actionsが自動設定)が
+設定されている時はこの回避策を無効化し、ビルド出力を標準の`<module>/build/`配下に固定している。
+
 ## 未着手タスク
 
 - [x] プロジェクト雛形(Gradle + Kotlin + JavaFX + beat-link依存関係、core/gui マルチモジュール)
