@@ -49,6 +49,8 @@ class Receiver {
     private val artFinder = ArtFinder.getInstance()
 
     @Volatile private var shouldRun = false
+    /** metadataFinder等のサブコンポーネントまで含めて起動が完了したか。pollDeck()のレース防止用。 */
+    @Volatile private var started = false
 
     /**
      * Receiverを起動する。呼び出し元スレッドをブロックする点に注意
@@ -84,11 +86,13 @@ class Receiver {
         waveformFinder.setColorPreferred(true)
         waveformFinder.start()
         artFinder.start()
+        started = true
         logger.info("Receiver started.")
     }
 
     fun stop() {
         shouldRun = false
+        started = false
         artFinder.stop()
         waveformFinder.stop()
         timeFinder.stop()
@@ -101,9 +105,12 @@ class Receiver {
      * デッキ1台分の現在の状態を取得する。デバイスが見えていない/CDJでなければnull。
      * まだCDJが1台も見つかっておらずVirtualCdjが起動していない間もnullを返す
      * (beat-linkはこの状態で `getLatestStatusFor` を呼ぶと例外を投げるため)。
+     * `start()`がmetadataFinder等のサブコンポーネントまで起動し終える前に呼ばれた場合も
+     * nullを返す(呼び出し元は`start()`を別スレッドで呼んだ直後からポーリングを始めることが
+     * あり、サブコンポーネント起動完了前に呼ぶと`IllegalStateException`になるため。実機で確認済み)。
      */
     fun pollDeck(playerNumber: Int): DeckSnapshot? {
-        if (!virtualCdj.isRunning) return null
+        if (!started || !virtualCdj.isRunning) return null
         val status = virtualCdj.getLatestStatusFor(playerNumber) as? CdjStatus ?: return null
         val metadata = metadataFinder.getLatestMetadataFor(playerNumber)
         val positionMs = timeFinder.getTimeFor(playerNumber)
