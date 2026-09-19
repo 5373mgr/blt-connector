@@ -75,9 +75,19 @@
     align-items: center;
     color: #fff;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
-    white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+  }
+  .box.text-box.overflow-ellipsis { white-space: nowrap; text-overflow: ellipsis; }
+  .box.text-box.overflow-wrap { white-space: normal; overflow-wrap: break-word; word-break: break-word; }
+  .box.text-box.overflow-scroll { white-space: nowrap; }
+  .box.text-box.overflow-scroll .text-inner { display: inline-block; }
+  .box.text-box.overflow-scroll.marquee-active .text-inner {
+    animation: marquee-scroll linear infinite;
+    animation-duration: var(--marquee-dur, 10s);
+  }
+  @keyframes marquee-scroll {
+    0% { transform: translateX(100%); }
+    100% { transform: translateX(-100%); }
   }
   #sidebar { width: 360px; }
   #sidebar h2 { font-size: 14px; margin: 0 0 8px; }
@@ -368,8 +378,7 @@
     layout.elements.forEach((cfg) => {
       if (cfg.type !== "text") return;
       const box = document.getElementById("box-" + cfg.id);
-      const span = box && box.querySelector("span");
-      if (span) span.textContent = applyTemplate(cfg.template || "", effectiveVars());
+      if (box) setEditorTextContent(box, cfg, applyTemplate(cfg.template || "", effectiveVars()));
     });
   }
 
@@ -427,6 +436,24 @@
     );
   }
 
+  /** index.htmlのsetTextContentと同じ考え方(overflowMode="scroll"の時だけ、実際に
+   *  枠からはみ出す場合に限りマーキーアニメーションを有効にする)のエディタプレビュー版。 */
+  function setEditorTextContent(box, cfg, text) {
+    const inner = box.querySelector(".text-inner");
+    if (!inner) return;
+    inner.textContent = text;
+    if ((cfg.overflowMode || "ellipsis") !== "scroll") return;
+    box.classList.remove("marquee-active");
+    requestAnimationFrame(() => {
+      const overflowPx = inner.scrollWidth - box.clientWidth;
+      if (overflowPx <= 0) return;
+      const pxPerSecond = 80;
+      const durationSec = Math.max(4, (inner.scrollWidth + box.clientWidth) / pxPerSecond);
+      box.style.setProperty("--marquee-dur", durationSec + "s");
+      box.classList.add("marquee-active");
+    });
+  }
+
   /**
    * 波形要素のプレビューを描く(実データが無いためダミー波形+スクラバーで確認する)。
    * index.htmlの`drawWaveformCanvas`と同じ考え方(表示方式が「曲全体」ならキャンバス幅に
@@ -455,12 +482,15 @@
       ctx.fillStyle = color;
       ctx.fillRect(x, (h - barHeight) / 2, Math.max(1, barWidth - 0.5), barHeight);
     }
-    function drawGrid(startSec, endSec) {
+    function drawGrid(centerSec, pixelsPerSecond, anchorPx) {
       ctx.strokeStyle = "rgba(255,255,255,0.15)";
       ctx.beginPath();
       ctx.moveTo(0, h / 2);
       ctx.lineTo(w, h / 2);
       ctx.stroke();
+      if (pixelsPerSecond <= 0) return;
+      const startSec = centerSec - anchorPx / pixelsPerSecond;
+      const endSec = centerSec + (w - anchorPx) / pixelsPerSecond;
       const span = endSec - startSec;
       if (span <= 0) return;
       const candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
@@ -470,7 +500,7 @@
       }
       const first = Math.ceil(startSec / interval) * interval;
       for (let t = first; t <= endSec; t += interval) {
-        const x = ((t - startSec) / span) * w;
+        const x = anchorPx + (t - centerSec) * pixelsPerSecond;
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
@@ -483,7 +513,10 @@
     }
 
     if (!windowSeconds || windowSeconds <= 0) {
-      if (cfg.showGrid) drawGrid(0, FAKE_DURATION_MS / 1000);
+      if (cfg.showGrid) {
+        const durationSec = FAKE_DURATION_MS / 1000;
+        drawGrid(durationSec / 2, w / durationSec, w / 2);
+      }
       const barWidth = w / frameCount;
       for (let i = 0; i < frameCount; i++) drawBar(i * barWidth, barWidth, segments[i][0], segments[i][1]);
       drawPlayheadAt((positionMs / FAKE_DURATION_MS) * w);
@@ -493,25 +526,23 @@
     const framesPerMs = frameCount / FAKE_DURATION_MS;
     const windowFrames = Math.max(2, Math.round(windowSeconds * 1000 * framesPerMs));
     const centerFrame = positionMs * framesPerMs;
-    let start = Math.round(centerFrame - windowFrames / 2);
-    let end = start + windowFrames;
-    if (start < 0) {
-      end -= start;
-      start = 0;
-    }
-    if (end > frameCount) {
-      start -= (end - frameCount);
-      end = frameCount;
-    }
-    start = Math.max(0, start);
-    end = Math.min(frameCount, end);
+    // anchorPx: プレイヘッドを画面のどこに固定するか。0=左端、50=中央(既定)、100=右端。
+    const anchorRatio = Math.max(0, Math.min(100, Number(cfg.playheadPosition) ?? 50)) / 100;
+    const anchorPx = w * anchorRatio;
     const barWidth = w / windowFrames;
+    const beforeFrames = windowFrames * anchorRatio;
+    const afterFrames = windowFrames - beforeFrames;
+    const start = Math.max(0, Math.floor(centerFrame - beforeFrames));
+    const end = Math.min(frameCount, Math.ceil(centerFrame + afterFrames));
     if (cfg.showGrid) {
       const secondsPerFrame = FAKE_DURATION_MS / 1000 / frameCount;
-      drawGrid(start * secondsPerFrame, (start + windowFrames) * secondsPerFrame);
+      drawGrid(centerFrame * secondsPerFrame, barWidth / secondsPerFrame, anchorPx);
     }
-    for (let i = start; i < end; i++) drawBar((i - start) * barWidth, barWidth, segments[i][0], segments[i][1]);
-    drawPlayheadAt((centerFrame - start) * barWidth);
+    for (let i = start; i < end; i++) {
+      const x = anchorPx + (i - centerFrame) * barWidth;
+      drawBar(x, barWidth, segments[i][0], segments[i][1]);
+    }
+    drawPlayheadAt(anchorPx);
   }
 
   function redrawWaveformPreviews() {
@@ -631,8 +662,9 @@
       box.appendChild(label);
 
       if (cfg.type === "text") {
+        box.classList.add("overflow-" + (cfg.overflowMode || "ellipsis"));
         const textSpan = document.createElement("span");
-        textSpan.textContent = applyTemplate(cfg.template || "", effectiveVars());
+        textSpan.className = "text-inner";
         box.appendChild(textSpan);
       } else if (cfg.type === "waveform") {
         const waveCanvas = document.createElement("canvas");
@@ -655,6 +687,8 @@
       if (cfg.type === "waveform") {
         const waveCanvas = box.querySelector("canvas");
         if (waveCanvas) drawEditorWaveformPreview(waveCanvas, cfg);
+      } else if (cfg.type === "text") {
+        setEditorTextContent(box, cfg, applyTemplate(cfg.template || "", effectiveVars()));
       }
     });
   }
@@ -799,11 +833,19 @@
           <input type="number" data-field="fontSize" min="8" max="120" value="${cfg.fontSize || 16}">
           <label>文字色</label>
           <input type="color" data-field="color" value="${cfg.color || "#ffffff"}">
+          <label>枠に収まらない時の表示</label>
+          <select data-field="overflowMode">
+            <option value="ellipsis"${(cfg.overflowMode || "ellipsis") === "ellipsis" ? " selected" : ""}>省略(...)</option>
+            <option value="wrap"${cfg.overflowMode === "wrap" ? " selected" : ""}>折り返し</option>
+            <option value="scroll"${cfg.overflowMode === "scroll" ? " selected" : ""}>横スクロール</option>
+          </select>
         ` : isWaveform ? `
           <label>表示するデッキ/役割</label>
           <select data-field="variable">${roleOptionsHtml(cfg.variable)}</select>
           <label>表示方式(再生位置に追従してスクロールする範囲)</label>
           <select data-field="windowSeconds">${windowOptionsHtml}</select>
+          <label>再生位置(プレイヘッド)の左右位置(%、0=左端 50=中央 100=右端)</label>
+          <input type="number" data-field="playheadPosition" min="0" max="100" step="1" value="${cfg.playheadPosition ?? 50}">
           <div class="visible-row">
             <input type="checkbox" data-field="showGrid" id="grid-${cfg.id}" ${cfg.showGrid ? "checked" : ""}>
             <label for="grid-${cfg.id}">グリッドを表示する</label>
@@ -826,7 +868,7 @@
           const field = input.dataset.field;
           if (field === "visible" || field === "showGrid") {
             cfg[field] = input.checked;
-          } else if (field === "fontSize" || field === "rotation" || field === "windowSeconds") {
+          } else if (field === "fontSize" || field === "rotation" || field === "windowSeconds" || field === "playheadPosition") {
             cfg[field] = Number(input.value);
           } else {
             cfg[field] = input.value;
@@ -834,8 +876,15 @@
           applyBoxStyle(cfg.id);
           if (field === "template") {
             const box = document.getElementById("box-" + cfg.id);
-            const span = box && box.querySelector("span");
-            if (span) span.textContent = applyTemplate(cfg.template || "", effectiveVars());
+            if (box) setEditorTextContent(box, cfg, applyTemplate(cfg.template || "", effectiveVars()));
+          }
+          if (field === "overflowMode") {
+            const box = document.getElementById("box-" + cfg.id);
+            if (box) {
+              box.classList.remove("overflow-ellipsis", "overflow-wrap", "overflow-scroll", "marquee-active");
+              box.classList.add("overflow-" + cfg.overflowMode);
+              setEditorTextContent(box, cfg, applyTemplate(cfg.template || "", effectiveVars()));
+            }
           }
         });
       });
@@ -891,8 +940,7 @@
           textarea.value = textarea.value.slice(0, start) + varText + textarea.value.slice(end);
           cfg.template = textarea.value;
           const box = document.getElementById("box-" + cfg.id);
-          const span = box && box.querySelector("span");
-          if (span) span.textContent = applyTemplate(cfg.template, effectiveVars());
+          if (box) setEditorTextContent(box, cfg, applyTemplate(cfg.template, effectiveVars()));
           textarea.focus();
         });
       }
@@ -916,6 +964,7 @@
       template: "",
       x: 10, y: 10, width: 40, height: 8,
       fontFamily: "sans-serif", fontSize: 24, color: "#ffffff",
+      overflowMode: "ellipsis",
       visible: true,
     });
     renderAll();
@@ -940,6 +989,7 @@
       type: "waveform",
       variable: "onair",
       windowSeconds: 10,
+      playheadPosition: 50,
       showGrid: false,
       x: 5, y: 90, width: 90, height: 8,
       visible: true,

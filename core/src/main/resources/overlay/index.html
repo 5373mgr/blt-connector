@@ -38,9 +38,32 @@
   }
   .element.text-element {
     overflow: hidden;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  }
+  /* 枠に収まらない時の挙動(既定は省略=ellipsis)。テキストは常に.text-inner spanに
+     入れる(スクロールモードのtransformアニメーション対象にするため)。 */
+  .element.text-element.overflow-ellipsis {
     white-space: nowrap;
     text-overflow: ellipsis;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+  }
+  .element.text-element.overflow-wrap {
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: break-word;
+  }
+  .element.text-element.overflow-scroll {
+    white-space: nowrap;
+  }
+  .element.text-element.overflow-scroll .text-inner {
+    display: inline-block;
+  }
+  .element.text-element.overflow-scroll.marquee-active .text-inner {
+    animation: marquee-scroll linear infinite;
+    animation-duration: var(--marquee-dur, 10s);
+  }
+  @keyframes marquee-scroll {
+    0% { transform: translateX(100%); }
+    100% { transform: translateX(-100%); }
   }
   .element.waveform-element {
     width: 100%;
@@ -206,6 +229,10 @@
         el.style.fontFamily = cfg.fontFamily || "sans-serif";
         el.style.fontSize = scaledFontSizePx(cfg.fontSize) + "px";
         el.style.color = cfg.color || "#ffffff";
+        el.classList.add("overflow-" + (cfg.overflowMode || "ellipsis"));
+        const inner = document.createElement("span");
+        inner.className = "text-inner";
+        el.appendChild(inner);
       }
       stage.appendChild(el);
       elementState[cfg.id] = {
@@ -252,13 +279,39 @@
 
     const commit = () => {
       state.holdTimer = null;
-      applyTextState(el, state, desiredKey);
+      applyTextState(cfg, el, state, desiredKey);
     };
     if (holdMs <= 0) commit();
     else state.holdTimer = setTimeout(commit, holdMs);
   }
 
-  function applyTextState(el, state, desiredKey) {
+  /**
+   * テキストを実際にDOMへ反映する(.text-inner spanのtextContentを更新)。
+   * overflowMode="scroll"の場合、枠に収まりきらない時だけ横スクロール(マーキー)の
+   * アニメーションを有効にする(収まっているのに動き続けるのを避けるため)。
+   * 速度は概ね一定になるよう、テキストの長さに応じてanimation-durationを調整する。
+   */
+  function setTextContent(el, cfg, text) {
+    const inner = el.querySelector(".text-inner");
+    if (!inner) {
+      el.textContent = text;
+      return;
+    }
+    inner.textContent = text;
+    if ((cfg.overflowMode || "ellipsis") !== "scroll") return;
+    el.classList.remove("marquee-active");
+    // scrollWidthの実測にはレイアウト確定後である必要があるため、次フレームで判定する。
+    requestAnimationFrame(() => {
+      const overflowPx = inner.scrollWidth - el.clientWidth;
+      if (overflowPx <= 0) return;
+      const pxPerSecond = 80; // 見やすさを優先した固定速度
+      const durationSec = Math.max(4, (inner.scrollWidth + el.clientWidth) / pxPerSecond);
+      el.style.setProperty("--marquee-dur", durationSec + "s");
+      el.classList.add("marquee-active");
+    });
+  }
+
+  function applyTextState(cfg, el, state, desiredKey) {
     if (desiredKey === null) {
       if (state.shown) {
         el.classList.remove("visible");
@@ -269,7 +322,7 @@
     }
 
     if (!state.shown) {
-      el.textContent = desiredKey;
+      setTextContent(el, cfg, desiredKey);
       state.contentKey = desiredKey;
       state.shown = true;
       requestAnimationFrame(() => el.classList.add("visible"));
@@ -279,14 +332,14 @@
     if (state.contentKey === desiredKey) return;
     state.contentKey = desiredKey;
     if (transitionMs <= 0) {
-      el.textContent = desiredKey;
+      setTextContent(el, cfg, desiredKey);
       return;
     }
     el.classList.remove("visible");
     setTimeout(() => {
       // 待っている間にさらに内容が変わっていたら、この古い更新は反映しない。
       if (state.contentKey !== desiredKey) return;
-      el.textContent = desiredKey;
+      setTextContent(el, cfg, desiredKey);
       el.classList.add("visible");
     }, transitionMs);
   }
@@ -460,10 +513,15 @@
     ctx.globalAlpha = 1;
   }
 
-  function drawWaveformBars(ctx, segments, start, end, isThreeBand, colors, barWidth, h, xOffset) {
+  /** フレーム番号[i]を、centerFrameがanchorPxに来るような等間隔スケール(barWidth)でx座標に変換する。 */
+  function frameToX(i, centerFrame, anchorPx, barWidth) {
+    return anchorPx + (i - centerFrame) * barWidth;
+  }
+
+  function drawWaveformBars(ctx, segments, start, end, isThreeBand, colors, barWidth, h, centerFrame, anchorPx) {
     for (let i = start; i < end; i++) {
       const seg = segments[i];
-      const x = (i - start) * barWidth + xOffset;
+      const x = frameToX(i, centerFrame, anchorPx, barWidth);
       if (isThreeBand) {
         drawWaveformBar(ctx, x, barWidth, seg[0], colors[0], h, 0.85);
         drawWaveformBar(ctx, x, barWidth, seg[1], colors[1], h, 0.85);
@@ -479,8 +537,12 @@
     ctx.fillRect(Math.max(0, x - 1), 0, 2, h);
   }
 
-  /** 中心の水平線と、見やすい間隔(1/2/5/10/15/30/60...秒)に自動調整した縦の目盛り線を描く。 */
-  function drawWaveformGrid(ctx, w, h, startSec, endSec) {
+  /**
+   * 中心の水平線と、見やすい間隔(1/2/5/10/15/30/60...秒)に自動調整した縦の目盛り線を描く。
+   * [centerSec]が[anchorPx]に来るよう、1秒あたり[pixelsPerSecond]px のスケールで配置する
+   * (波形バー本体の座標変換[frameToX]と同じ考え方)。
+   */
+  function drawWaveformGrid(ctx, w, h, centerSec, pixelsPerSecond, anchorPx) {
     ctx.strokeStyle = "rgba(255,255,255,0.15)";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -488,6 +550,9 @@
     ctx.lineTo(w, h / 2);
     ctx.stroke();
 
+    if (pixelsPerSecond <= 0) return;
+    const startSec = centerSec - anchorPx / pixelsPerSecond;
+    const endSec = centerSec + (w - anchorPx) / pixelsPerSecond;
     const span = endSec - startSec;
     if (span <= 0) return;
     const candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
@@ -497,7 +562,7 @@
     }
     const firstTick = Math.ceil(startSec / interval) * interval;
     for (let t = firstTick; t <= endSec; t += interval) {
-      const x = ((t - startSec) / span) * w;
+      const x = anchorPx + (t - centerSec) * pixelsPerSecond;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
@@ -508,11 +573,11 @@
   /**
    * 波形を描画する。[windowSeconds]が0以下、またはdurationMsが不明な場合は従来通り
    * 曲全体をキャンバス幅に収めて表示する(荒い間引きで十分な軽さの概観表示)。
-   * [windowSeconds]が正の値の場合は、再生位置が常にキャンバス中央に来るよう、
-   * その秒数ぶんの範囲だけを切り出してスクロール表示する(CDJ風)。曲の先頭/終端
-   * 付近では窓が切り詰められ、プレイヘッドは中央からずれる(トラック境界でクランプするため)。
+   * [windowSeconds]が正の値の場合は、再生位置を[playheadPosition](0〜100、既定50=中央)の
+   * 位置に固定し、その秒数ぶんの範囲だけを切り出してスクロール表示する(CDJ風)。
+   * 曲の先頭/終端付近では表示できるフレームが尽きるため、その分だけ空白になる。
    */
-  function drawWaveformCanvas(canvas, data, positionMs, durationMs, windowSeconds, showGrid) {
+  function drawWaveformCanvas(canvas, data, positionMs, durationMs, windowSeconds, showGrid, playheadPosition) {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(rect.width * dpr));
@@ -530,7 +595,10 @@
 
     if (!windowSeconds || windowSeconds <= 0 || !(durationMs > 0)) {
       // 曲全体を表示(間引いて軽量化)
-      if (showGrid) drawWaveformGrid(ctx, w, h, 0, durationMs > 0 ? durationMs / 1000 : frameCount);
+      if (showGrid && durationMs > 0) {
+        const durationSec = durationMs / 1000;
+        drawWaveformGrid(ctx, w, h, durationSec / 2, w / durationSec, w / 2);
+      }
       const step = Math.max(1, Math.floor(frameCount / w));
       const visibleCount = Math.ceil(frameCount / step);
       const barWidth = w / visibleCount;
@@ -556,28 +624,24 @@
     const framesPerMs = frameCount / durationMs;
     const windowFrames = Math.max(2, Math.round(windowSeconds * 1000 * framesPerMs));
     const centerFrame = positionMs * framesPerMs;
-    let start = Math.round(centerFrame - windowFrames / 2);
-    let end = start + windowFrames;
-    if (start < 0) {
-      end -= start;
-      start = 0;
-    }
-    if (end > frameCount) {
-      start -= (end - frameCount);
-      end = frameCount;
-    }
-    start = Math.max(0, start);
-    end = Math.min(frameCount, end);
-
-    // barWidthは窓の全長(windowFrames)基準にする。境界でクランプされていても
-    // 見た目のスケール(1フレームあたりの幅)が変わらないようにするため。
+    // anchorPx: 再生位置(プレイヘッド)を画面のどこに固定するか。0=左端、50=中央(既定)、100=右端。
+    const anchorRatio = Math.max(0, Math.min(100, Number(playheadPosition) ?? 50)) / 100;
+    const anchorPx = w * anchorRatio;
+    // barWidthは窓の全長(windowFrames)基準にする。曲の先頭/終端で表示可能なフレームが
+    // 尽きても見た目のスケール(1フレームあたりの幅)が変わらないようにするため。
     const barWidth = w / windowFrames;
+    const beforeFrames = windowFrames * anchorRatio;
+    const afterFrames = windowFrames - beforeFrames;
+    const start = Math.max(0, Math.floor(centerFrame - beforeFrames));
+    const end = Math.min(frameCount, Math.ceil(centerFrame + afterFrames));
+
     if (showGrid) {
       const secondsPerFrame = durationMs / 1000 / frameCount;
-      drawWaveformGrid(ctx, w, h, start * secondsPerFrame, (start + windowFrames) * secondsPerFrame);
+      const pixelsPerSecond = barWidth / secondsPerFrame;
+      drawWaveformGrid(ctx, w, h, centerFrame * secondsPerFrame, pixelsPerSecond, anchorPx);
     }
-    drawWaveformBars(ctx, segments, start, end, isThreeBand, data.colors || [], barWidth, h, 0);
-    drawPlayhead(ctx, (centerFrame - start) * barWidth, h);
+    drawWaveformBars(ctx, segments, start, end, isThreeBand, data.colors || [], barWidth, h, centerFrame, anchorPx);
+    drawPlayhead(ctx, anchorPx, h);
   }
 
   /** 波形要素のプレイヘッドを滑らかに動かすため、サーバーの送信間隔(100ms)に頼らず
@@ -601,7 +665,10 @@
       }
       // durationMsは(posInfoではなく)dataに固定した値を使う。今表示しているsegmentsが
       // 実際にどの曲のものかと対応させるため(曲切り替え直後の取得待ちの間は特に重要)。
-      drawWaveformCanvas(el, data, estimatedMs, durationMs, Number(cfg.windowSeconds) || 0, cfg.showGrid === true);
+      drawWaveformCanvas(
+        el, data, estimatedMs, durationMs,
+        Number(cfg.windowSeconds) || 0, cfg.showGrid === true, cfg.playheadPosition,
+      );
     });
     requestAnimationFrame(waveformAnimationLoop);
   }
