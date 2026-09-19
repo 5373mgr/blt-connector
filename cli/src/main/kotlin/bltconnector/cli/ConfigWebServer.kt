@@ -68,6 +68,7 @@ class ConfigWebServer(port: Int, private val configPath: String) : NanoHTTPD(por
         val outputInterface = field("outputInterface").ifBlank { null }
         val overlayPort = field("overlayPort").toIntOrNull() ?: 8090
         val webGuiPort = field("webGuiPort").toIntOrNull() ?: 8081
+        val waveformStyle = field("waveformStyle").takeIf { it == "THREE_BAND" } ?: "RGB"
 
         val destNames = params["destName"].orEmpty()
         val destHosts = params["destHost"].orEmpty()
@@ -85,6 +86,7 @@ class ConfigWebServer(port: Int, private val configPath: String) : NanoHTTPD(por
             overlayPort = overlayPort,
             webGuiPort = webGuiPort,
             carabinerPort = Config.load(configPath).carabinerPort, // フォームに項目が無いため既存値を渡す
+            waveformStyle = waveformStyle,
             destinations = destinations,
         )
         Config.save(configPath, newConfig)
@@ -153,6 +155,13 @@ class ConfigWebServer(port: Int, private val configPath: String) : NanoHTTPD(por
                 <div>
                   <label for="webGuiPort">この設定画面のポート:</label>
                   <input type="text" name="webGuiPort" id="webGuiPort" value="${config.webGuiPort}">
+                </div>
+                <div>
+                  <label for="waveformStyle">波形の取得方式:</label>
+                  <select name="waveformStyle" id="waveformStyle">
+                    <option value="RGB"${if (config.waveformStyle != "THREE_BAND") " selected" else ""}>RGB(色波形)</option>
+                    <option value="THREE_BAND"${if (config.waveformStyle == "THREE_BAND") " selected" else ""}>3Band</option>
+                  </select>
                 </div>
 
                 <h2>OSC配信先</h2>

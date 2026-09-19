@@ -118,6 +118,9 @@ GET  /monitor             -- VJが自分のブラウザで確認する非透過�
 GET  /art/deck/{n}        -- 現在のジャケット画像をそのまま返す(<img src="...">で直接読み込める)
 GET  /waveform/deck/{n}          -- 現在の波形プレビューの生バイト列(2026-09-19追加)
 GET  /waveform-detail/deck/{n}   -- 現在の高解像度波形(WaveformDetail)の生バイト列(2026-09-19追加)
+GET  /waveform-render/deck/{n}   -- 高解像度波形をデコード済み(高さ+色、RGB/3Band共通)のJSONで配信(2026-09-19追加)
+GET  /editor              -- Overlayレイアウトエディタ(2026-09-19追加)
+GET  /layout / POST /layout -- Overlayレイアウト設定(JSON)の取得/保存(2026-09-19追加)
 WS   /ws                  -- デッキ状態(タイトル/アーティスト/アルバム/BPM/再生位置/Masterフラグ/波形)を
                               JSONでプッシュ配信
 ```
@@ -141,6 +144,49 @@ HTTPベースのOverlay/`/monitor`には当てはまらない。そのため`Rec
   `NanoWSD`を継承する都合上、この依存はcoreの`api`依存にしている(利用側がstart/stopを呼ぶ際に
   親クラスの型解決が必要なため。`core/build.gradle.kts`参照)
 - 配布するHTML/CSS/JSはこのリポジトリ内に持ち、Overlayサーバーがそのまま静的ファイルとして返す
+
+### Overlayレイアウトエディタ(`/editor`)とテンプレート変数(2026-09-19決定)
+
+Overlay(`/`)は「オンエア中の1曲」固定表示から、任意のデッキ/役割(`deck1`〜`deck4`/`master`/`onair`)の
+任意の項目をテキストに埋め込める汎用モデルへ刷新した。レイアウトは要素の配列(`overlay-layout.json`、
+`LayoutStore`が管理)で表現し、テキスト要素は`{onair-track-name}`等の変数をテンプレート文字列内に
+埋め込める(`OverlayServer.buildVariablesJson()`が毎tick組み立てて`vars`としてWS配信)。
+フォントは`FontLibrary`がアップロード・提供する。
+
+- **切り替えエフェクト**: 曲情報が瞬時に差し替わると動きに乏しいため、フェード/スライド/ズーム等の
+  パターンと速さ(`layout.transition`/`transitionMs`)を追加した。表示⇔非表示・内容変更の両方で
+  フェードアウト→差し替え→フェードインさせる。
+- **切り替え保持時間**: 曲情報が短時間で何度も変化する場合のチラつきを避けるため、新しい内容が
+  `holdSeconds`秒間安定するまで実際の表示切り替えを保留するdebounceを追加した(`layout.holdSeconds`、
+  既定0=従来通り即時)。
+
+### Overlayでの波形表示と3Band対応(2026-09-19決定)
+
+**背景**: `/monitor`は波形を描画できるが、OBS向けOverlay(`/`)には波形表示の仕組みが無かった。
+また波形の取得方式はbeat-link 8.0.0で追加された`WaveformFinder.WaveformStyle`(`RGB`/`THREE_BAND`/`BLUE`)
+により、CDJ-3000由来の3Band波形も選べるようになったが、これはアプリ全体で1つしか選べない
+(デッキ毎/要素毎の切り替えは不可)設定のため、CLI設定画面(`/`ポート`webGuiPort`側)とGUIの選択UIで
+切り替える(`Config.waveformStyle`、`Receiver.start(waveformStyle)`)。
+
+**サーバー側デコード方式**: 3Band波形は生バイト列を素朴に解釈しても描画できず
+(`WaveformDetail.segmentColor()`は3BandだとUnsupportedOperationExceptionを投げ、
+帯域ごとに固定色を使う仕様のため)、クライアントJS側で生バイト列を再実装するのではなく、
+`WaveformDetail.segmentHeight()`/`segmentColor()`(RGB/BLUE)と
+`segmentHeight(segment, scale, ThreeBandLayer)`(3Band、`ThreeBandLayer.color`で固定色を取得)を
+**サーバー側(JVM)で呼び出し**、高さ+色をデコード済みのJSONとして配信する
+(`GET /waveform-render/deck/{n}?width=`、`OverlayServer.handleWaveformRender()`)。
+クライアントは波形スタイルを意識せず、返ってきた`segments`をそのまま棒グラフとして描画するだけでよい。
+
+**Overlayの波形要素**: レイアウトに`{"type":"waveform","variable":"onair", ...}`要素を追加できる
+(`/editor`の「+ 波形を追加」)。曲が変わった時(`{prefix}-art-version`の変化)だけ
+`/waveform-render/deck/{n}`を再取得し、再生位置(`{prefix}-position-ms`等、WS配信の`vars`に追加)は
+サーバーの送信間隔(100ms)に関係なく`requestAnimationFrame`で時間ベース補間して毎フレーム
+プレイヘッドを滑らかに動かす(実際のポーリング間隔自体は変更していない)。
+
+**波形取得の信頼性**: 従来`OverlayServer`は曲変化を検知したそのtickでのみ波形バイト列を
+キャッシュしており、その瞬間にまだbeat-link側からデータが届いていないと次の曲変化まで
+永久に空のままになる不具合があった。曲変化時はキャッシュを無効化するだけにとどめ、
+以後は届き次第(毎tick再試行して)確定させるよう修正した。
 
 ## モジュール構成
 

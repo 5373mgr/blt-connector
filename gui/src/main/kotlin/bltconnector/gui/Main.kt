@@ -5,12 +5,14 @@ import bltconnector.core.overlay.OverlayServer
 import bltconnector.core.receiver.Receiver
 import bltconnector.core.sender.Destination
 import bltconnector.core.sender.Sender
+import org.deepsymmetry.beatlink.data.WaveformFinder
 import javafx.application.Application
 import javafx.application.Platform
 import javafx.geometry.Insets
 import javafx.scene.Scene
 import javafx.scene.control.Button
 import javafx.scene.control.CheckBox
+import javafx.scene.control.ChoiceBox
 import javafx.scene.control.Label
 import javafx.scene.control.ListView
 import javafx.scene.control.TextArea
@@ -48,6 +50,10 @@ class Main : Application() {
         val receiverCheckBox = CheckBox("Receiver").apply { isSelected = false }
         val overlayCheckBox = CheckBox("Overlay").apply { isSelected = true }
         val carabinerCheckBox = CheckBox("Carabiner (Ableton Link)").apply { isSelected = true }
+        val waveformStyleChoice = ChoiceBox<String>().apply {
+            items.addAll("RGB", "3Band")
+            value = "RGB"
+        }
 
         try {
             overlayServer.startServer()
@@ -80,7 +86,12 @@ class Main : Application() {
                     status.text = "Receiver: 起動中(CDJ検出待ち)"
                     // beat-linkはCDJが見つかるまで内部で数十秒ブロックし得るため、JavaFXスレッドを
                     // フリーズさせないよう別スレッドで起動する
-                    Thread({ receiver.start() }, "Receiver Startup").apply { isDaemon = true }.start()
+                    val style = if (waveformStyleChoice.value == "3Band") {
+                        WaveformFinder.WaveformStyle.THREE_BAND
+                    } else {
+                        WaveformFinder.WaveformStyle.RGB
+                    }
+                    Thread({ receiver.start(style) }, "Receiver Startup").apply { isDaemon = true }.start()
                 }
             } else {
                 receiverRunning = false
@@ -132,7 +143,7 @@ class Main : Application() {
             destinationList.items.remove(selected)
         }
 
-        val toggleRow = HBox(12.0, receiverCheckBox, overlayCheckBox, carabinerCheckBox)
+        val toggleRow = HBox(12.0, receiverCheckBox, overlayCheckBox, carabinerCheckBox, Label("波形:"), waveformStyleChoice)
         val destinationRow = HBox(8.0, destinationInput, addDestinationButton, removeDestinationButton)
         val root = VBox(10.0, status, toggleRow, destinationRow, destinationList, log).apply {
             padding = Insets(16.0)

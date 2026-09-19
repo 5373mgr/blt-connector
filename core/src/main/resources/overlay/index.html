@@ -40,6 +40,10 @@
     text-overflow: ellipsis;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
   }
+  .element.waveform-element {
+    width: 100%;
+    height: 100%;
+  }
 
   /* 切り替えエフェクトのパターン。#stageに付くクラスで一括切り替え、
      速さはCSS変数--t-dur(JS側でlayout.transitionMsから設定)で調整する。 */
@@ -79,6 +83,12 @@
   // フェードアウト→内容差し替え→フェードインの制御に使う。
   const elementState = {};
 
+  // 波形要素専用の状態。waveformDataは/waveform-render/deck/{n}のレスポンスをそのままキャッシュし、
+  // lastPositionInfoは再生位置をrequestAnimationFrameで滑らかに補間描画するための直近スナップショット。
+  const waveformElements = [];
+  const waveformData = {};
+  const lastPositionInfo = {};
+
   function loadFonts() {
     return fetch("/fonts")
       .then((res) => res.json())
@@ -115,9 +125,11 @@
     holdMs = Math.max(0, Number(layout.holdSeconds) || 0) * 1000;
 
     (layout.elements || []).forEach((cfg) => {
-      const el = document.createElement(cfg.type === "image" ? "img" : "div");
+      const tag = cfg.type === "image" ? "img" : cfg.type === "waveform" ? "canvas" : "div";
+      const el = document.createElement(tag);
       el.id = cfg.id;
-      el.className = "element " + (cfg.type === "image" ? "image-element" : "text-element");
+      const typeClass = cfg.type === "image" ? "image-element" : cfg.type === "waveform" ? "waveform-element" : "text-element";
+      el.className = "element " + typeClass;
       el.style.left = cfg.x + "%";
       el.style.top = cfg.y + "%";
       el.style.width = cfg.width + "%";
@@ -128,7 +140,10 @@
         el.style.color = cfg.color || "#ffffff";
       }
       stage.appendChild(el);
-      elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null, desiredKey: undefined, holdTimer: null };
+      elementState[cfg.id] = {
+        shown: false, contentKey: null, pendingKey: null, desiredKey: undefined, committedKey: undefined, holdTimer: null,
+      };
+      if (cfg.type === "waveform") waveformElements.push(cfg);
     });
   }
 
@@ -144,6 +159,7 @@
       const el = document.getElementById(cfg.id);
       if (!el) return;
       if (cfg.type === "image") updateImageElement(cfg, el, vars);
+      else if (cfg.type === "waveform") updateWaveformElement(cfg, el, vars);
       else updateTextElement(cfg, el, vars);
     });
   }
@@ -273,6 +289,154 @@
       load();
     }
   }
+
+  /**
+   * 波形要素を更新する。波形の「形」自体は曲が変わった時しか変化しないため、
+   * デッキの`-art-version`(曲の識別バージョン)をキーにして曲変化を検知し、変化時だけ
+   * `/waveform-render/deck/{n}`を再取得する(テキスト/画像と同じhold/debounceの対象)。
+   * 再生位置(`-position-ms`等)はholdの影響を受けず毎tick更新し、波形自体を再取得せずとも
+   * requestAnimationFrameでプレイヘッドだけ滑らかに動かせるようにする。
+   */
+  function updateWaveformElement(cfg, el, vars) {
+    const state = elementState[cfg.id] ||
+      (elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null, committedKey: undefined });
+
+    const positionMs = Number(vars[cfg.variable + "-position-ms"]);
+    const durationMsRaw = Number(vars[cfg.variable + "-duration-ms"]);
+    if (!Number.isNaN(positionMs)) {
+      lastPositionInfo[cfg.id] = {
+        positionMs,
+        durationMs: Number.isNaN(durationMsRaw) ? 0 : durationMsRaw,
+        playing: vars[cfg.variable + "-playing"] === "true",
+        receivedAt: performance.now(),
+      };
+    }
+
+    const hasWaveform = vars[cfg.variable + "-has-waveform-detail"] === "true";
+    const shouldShow = hasWaveform && cfg.visible !== false;
+    const trackVersion = vars[cfg.variable + "-art-version"] || "0";
+    const desiredKey = shouldShow ? trackVersion : null;
+
+    if (state.desiredKey !== desiredKey) {
+      state.desiredKey = desiredKey;
+      if (state.holdTimer) clearTimeout(state.holdTimer);
+      const commit = () => {
+        state.holdTimer = null;
+        state.committedKey = desiredKey;
+        fetchWaveformIfNeeded(cfg, el, state, vars);
+      };
+      if (holdMs <= 0) commit();
+      else state.holdTimer = setTimeout(commit, holdMs);
+      return;
+    }
+
+    // desiredKeyは変わっていないが、まだデータが無い(取得前/前回失敗)なら毎tick再試行する。
+    if (state.committedKey === desiredKey && desiredKey !== null &&
+        !waveformData[cfg.id] && state.pendingKey !== desiredKey) {
+      fetchWaveformIfNeeded(cfg, el, state, vars);
+    }
+  }
+
+  function fetchWaveformIfNeeded(cfg, el, state, vars) {
+    const desiredKey = state.committedKey;
+    if (desiredKey === null) {
+      if (state.shown) {
+        el.classList.remove("visible");
+        state.shown = false;
+      }
+      state.contentKey = null;
+      state.pendingKey = null;
+      delete waveformData[cfg.id];
+      return;
+    }
+
+    const playerNumber = vars[cfg.variable + "-player-number"];
+    state.pendingKey = desiredKey;
+    const width = Math.max(50, Math.round(el.getBoundingClientRect().width) || 300);
+    fetch("/waveform-render/deck/" + playerNumber + "?width=" + width)
+      .then((res) => {
+        if (!res.ok) throw new Error("waveform not ready");
+        return res.json();
+      })
+      .then((data) => {
+        // 待っている間に別の曲へ変わっていたら、この古い結果は反映しない(次tickの
+        // fetchWaveformIfNeededが新しいdesiredKeyで再取得する)。
+        if (state.committedKey !== desiredKey) return;
+        waveformData[cfg.id] = data;
+        state.contentKey = desiredKey;
+        state.pendingKey = null;
+        if (!state.shown) {
+          state.shown = true;
+          requestAnimationFrame(() => el.classList.add("visible"));
+        }
+      })
+      .catch(() => {
+        if (state.pendingKey === desiredKey) state.pendingKey = null; // 次tickで再試行
+      });
+  }
+
+  /** 波形バー1本を描画する(中央基準で上下に伸ばす、CDJ風)。 */
+  function drawWaveformBar(ctx, x, barWidth, height31, color, canvasHeight, alpha) {
+    const ratio = Math.max(0, Math.min(31, height31)) / 31;
+    const barHeight = ratio * canvasHeight;
+    const y = (canvasHeight - barHeight) / 2;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawWaveformCanvas(canvas, data, positionMs, durationMs) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, w, h);
+    const segments = data.segments || [];
+    const n = segments.length;
+    if (n === 0) return;
+    const barWidth = w / n;
+    const isThreeBand = data.style === "THREE_BAND";
+    for (let i = 0; i < n; i++) {
+      const seg = segments[i];
+      const x = i * barWidth;
+      if (isThreeBand) {
+        drawWaveformBar(ctx, x, barWidth, seg[0], data.colors[0], h, 0.85);
+        drawWaveformBar(ctx, x, barWidth, seg[1], data.colors[1], h, 0.85);
+        drawWaveformBar(ctx, x, barWidth, seg[2], data.colors[2], h, 0.85);
+      } else {
+        drawWaveformBar(ctx, x, barWidth, seg[0], seg[1], h, 1);
+      }
+    }
+    if (durationMs > 0) {
+      const ratio = Math.max(0, Math.min(1, positionMs / durationMs));
+      const px = ratio * w;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fillRect(Math.max(0, px - 1), 0, 2, h);
+    }
+  }
+
+  /** 波形要素のプレイヘッドを滑らかに動かすため、サーバーの送信間隔(100ms)に頼らず
+   *  毎フレーム再生位置を時間ベースで補間して再描画する。 */
+  function waveformAnimationLoop() {
+    const now = performance.now();
+    waveformElements.forEach((cfg) => {
+      const el = document.getElementById(cfg.id);
+      const data = waveformData[cfg.id];
+      const posInfo = lastPositionInfo[cfg.id];
+      if (!el || !data || !posInfo || !el.classList.contains("visible")) return;
+      let estimatedMs = posInfo.positionMs;
+      if (posInfo.playing) estimatedMs += now - posInfo.receivedAt;
+      drawWaveformCanvas(el, data, estimatedMs, posInfo.durationMs);
+    });
+    requestAnimationFrame(waveformAnimationLoop);
+  }
+  requestAnimationFrame(waveformAnimationLoop);
 
   function connect() {
     const ws = new WebSocket("ws://" + location.host + "/ws");

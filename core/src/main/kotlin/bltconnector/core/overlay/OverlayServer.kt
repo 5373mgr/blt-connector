@@ -6,9 +6,12 @@ import fi.iki.elonen.NanoHTTPD.IHTTPSession
 import fi.iki.elonen.NanoHTTPD.Method
 import fi.iki.elonen.NanoHTTPD.Response
 import fi.iki.elonen.NanoWSD
+import org.deepsymmetry.beatlink.data.WaveformDetail
+import org.deepsymmetry.beatlink.data.WaveformFinder
 import org.json.JSONArray
 import org.json.JSONObject
 import org.slf4j.LoggerFactory
+import java.awt.Color
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
@@ -26,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - `GET  /art/deck/{n}`            -- 現在のジャケット画像(JPEG)
  * - `GET  /waveform/deck/{n}`       -- 現在の波形プレビューの生バイト列(mono/color、`waveformColor`で判別)
  * - `GET  /waveform-detail/deck/{n}` -- 現在の高解像度波形の生バイト列(`waveformDetailColor`で判別)
+ * - `GET  /waveform-render/deck/{n}` -- 高解像度波形をデコード済み(高さ+色)のJSONで配信(RGB/3Band共通)
  * - `GET  /layout`                  -- 保存済みのOverlayレイアウト設定(JSON)
  * - `POST /layout`                  -- レイアウト設定(JSON)を保存する
  * - `GET  /fonts`                   -- インストール済みフォント一覧(JSON配列)
@@ -50,6 +54,8 @@ class OverlayServer(
     private val latestArt = ConcurrentHashMap<Int, ByteArray>()
     private val latestWaveform = ConcurrentHashMap<Int, ByteArray>()
     private val latestWaveformDetail = ConcurrentHashMap<Int, ByteArray>()
+    /** `segmentHeight`/`segmentColor`でオンデマンドに描画するための、生バイト列とは別の実体。 */
+    private val latestWaveformDetailObject = ConcurrentHashMap<Int, WaveformDetail>()
     private val trackVersions = ConcurrentHashMap<Int, Int>()
     private val lastTrackKey = ConcurrentHashMap<Int, Any>()
     private val latestDeck = ConcurrentHashMap<Int, DeckSnapshot>()
@@ -178,6 +184,15 @@ class OverlayServer(
                 }
             }
 
+            uri.startsWith("/waveform-render/deck/") -> {
+                val playerNumber = uri.removePrefix("/waveform-render/deck/").substringBefore("?").toIntOrNull()
+                if (playerNumber != null) {
+                    handleWaveformRender(playerNumber, session)
+                } else {
+                    NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "invalid player number")
+                }
+            }
+
             uri == "/layout" && session.method == Method.GET -> handleGetLayout()
             uri == "/layout" && session.method == Method.POST -> handleSaveLayout(session)
 
@@ -189,6 +204,59 @@ class OverlayServer(
             else -> NanoHTTPD.newFixedLengthResponse(Response.Status.NOT_FOUND, NanoHTTPD.MIME_PLAINTEXT, "not found")
         }
     }
+
+    /**
+     * 波形をあらかじめデコード済みの形(高さ+色)でJSON配信する。生バイト列と違い、beat-linkの
+     * `WaveformDetail.segmentHeight`/`segmentColor`を通すため、RGB波形・3Band波形のどちらでも
+     * (呼び出し側が生バイト列の形式を知らなくても)正しく描画できる。3Bandは単一の色を持たず
+     * 帯域ごとに固定色で描く仕様のため、`segments`各要素が[low,mid,high]の3値になり、
+     * `colors`にその3色(`WaveformFinder.ThreeBandLayer`の色)を別途載せる。
+     * [width]は描画したい列数の目安(既定300、10〜2000にクランプ)で、実際の`scale`
+     * (何フレームを1列に平均するか)はフレーム数から逆算する。
+     */
+    private fun handleWaveformRender(playerNumber: Int, session: IHTTPSession): Response {
+        val detail = latestWaveformDetailObject[playerNumber]
+            ?: return NanoHTTPD.newFixedLengthResponse(Response.Status.NOT_FOUND, NanoHTTPD.MIME_PLAINTEXT, "no waveform detail")
+        val width = session.parameters["width"]?.firstOrNull()?.toIntOrNull()?.coerceIn(10, 2000) ?: 300
+        val frameCount = detail.frameCount
+        val scale = if (frameCount > 0) maxOf(1, frameCount / width) else 1
+        val segments = JSONArray()
+        var segment = 0
+        while (segment < frameCount) {
+            if (detail.style == WaveformFinder.WaveformStyle.THREE_BAND) {
+                val low = detail.segmentHeight(segment, scale, WaveformFinder.ThreeBandLayer.LOW)
+                val mid = detail.segmentHeight(segment, scale, WaveformFinder.ThreeBandLayer.MID)
+                val high = detail.segmentHeight(segment, scale, WaveformFinder.ThreeBandLayer.HIGH)
+                segments.put(JSONArray(listOf(low, mid, high)))
+            } else {
+                val height = detail.segmentHeight(segment, scale)
+                val color = detail.segmentColor(segment, scale)
+                segments.put(JSONArray(listOf(height, colorHex(color))))
+            }
+            segment += scale
+        }
+        val json = JSONObject().apply {
+            put("style", detail.style.name)
+            put("frameCount", frameCount)
+            put("scale", scale)
+            put("segments", segments)
+            if (detail.style == WaveformFinder.WaveformStyle.THREE_BAND) {
+                put(
+                    "colors",
+                    JSONArray(
+                        listOf(
+                            colorHex(WaveformFinder.ThreeBandLayer.LOW.color),
+                            colorHex(WaveformFinder.ThreeBandLayer.MID.color),
+                            colorHex(WaveformFinder.ThreeBandLayer.HIGH.color),
+                        ),
+                    ),
+                )
+            }
+        }
+        return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", json.toString())
+    }
+
+    private fun colorHex(color: Color): String = String.format("#%02x%02x%02x", color.red, color.green, color.blue)
 
     private fun handleGetLayout(): Response =
         NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", layoutStore.load())
@@ -255,16 +323,22 @@ class OverlayServer(
             } else {
                 latestArt.remove(deck.playerNumber)
             }
-            if (deck.waveform != null) {
-                latestWaveform[deck.playerNumber] = deck.waveform
-            } else {
-                latestWaveform.remove(deck.playerNumber)
-            }
-            if (deck.waveformDetail != null) {
-                latestWaveformDetail[deck.playerNumber] = deck.waveformDetail
-            } else {
-                latestWaveformDetail.remove(deck.playerNumber)
-            }
+            // 波形は曲の切り替わり時点でいったん無効化し、下の「未取得なら埋める」処理に
+            // 委ねる。曲変化直後はbeat-link側の波形データがまだ届いていないことがあり、
+            // その瞬間のtickだけで確定させると次の曲変化まで永久に空のままになるため。
+            latestWaveform.remove(deck.playerNumber)
+            latestWaveformDetail.remove(deck.playerNumber)
+            latestWaveformDetailObject.remove(deck.playerNumber)
+        }
+
+        if (!latestWaveform.containsKey(deck.playerNumber) && deck.waveform != null) {
+            latestWaveform[deck.playerNumber] = deck.waveform
+        }
+        if (!latestWaveformDetail.containsKey(deck.playerNumber) && deck.waveformDetail != null) {
+            latestWaveformDetail[deck.playerNumber] = deck.waveformDetail
+        }
+        if (!latestWaveformDetailObject.containsKey(deck.playerNumber) && deck.waveformDetailObject != null) {
+            latestWaveformDetailObject[deck.playerNumber] = deck.waveformDetailObject
         }
 
         val json = JSONObject().apply {
@@ -327,6 +401,15 @@ class OverlayServer(
             json.put("$prefix-player-number", deck?.playerNumber?.toString() ?: "")
             json.put("$prefix-has-art", (deck != null && latestArt.containsKey(deck.playerNumber)).toString())
             json.put("$prefix-art-version", deck?.let { (trackVersions[it.playerNumber] ?: 0).toString() } ?: "0")
+            // 波形要素がクライアント側で再生位置を(サーバーの送信間隔に頼らず)滑らかに
+            // 補間描画できるよう、位置/再生状態/長さも変数として渡す。
+            json.put("$prefix-position-ms", deck?.positionMs?.toString() ?: "")
+            json.put("$prefix-playing", (deck?.playing ?: false).toString())
+            json.put("$prefix-duration-ms", deck?.durationMs?.toString() ?: "")
+            json.put(
+                "$prefix-has-waveform-detail",
+                (deck != null && latestWaveformDetailObject.containsKey(deck.playerNumber)).toString(),
+            )
         }
 
         for (n in 1..4) {

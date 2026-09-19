@@ -6,6 +6,7 @@ import org.deepsymmetry.beatlink.VirtualCdj
 import org.deepsymmetry.beatlink.data.ArtFinder
 import org.deepsymmetry.beatlink.data.MetadataFinder
 import org.deepsymmetry.beatlink.data.TimeFinder
+import org.deepsymmetry.beatlink.data.WaveformDetail
 import org.deepsymmetry.beatlink.data.WaveformFinder
 import org.slf4j.LoggerFactory
 
@@ -50,6 +51,12 @@ data class DeckSnapshot(
      */
     val waveformDetail: ByteArray? = null,
     val waveformDetailColor: Boolean = false,
+    /**
+     * 高解像度波形のbeat-linkオブジェクトそのもの(生バイト列と違い、`segmentHeight`/`segmentColor`
+     * で正しくデコードできる。3Band波形はバイト列の単純な解釈だけでは描画できないため、
+     * Overlay側でオンデマンドに描画する際はこちらを使う)。JSON化やOSC配信の対象外。
+     */
+    val waveformDetailObject: WaveformDetail? = null,
     /** ジャケット画像の生バイト列(JPEG想定)。Overlay配信用。 */
     val artwork: ByteArray?,
     /** ホットキュー/メモリーキューの一覧(Overlay配信用、OSCへは配信しない)。 */
@@ -88,8 +95,11 @@ class Receiver {
      *
      * CDJがまだ電源投入されていない/ネットワークに現れていない場合に備え、
      * 見つかるまで(または`stop()`が呼ばれるまで)内部でリトライし続ける。
+     *
+     * [waveformStyle] は色波形(RGB)か3Band波形かを指定する。beat-link側の制約でアプリ全体に
+     * つき1つしか同時に扱えない。
      */
-    fun start() {
+    fun start(waveformStyle: WaveformFinder.WaveformStyle = WaveformFinder.WaveformStyle.RGB) {
         shouldRun = true
         // MetadataFinderがdbserver経由でタイトル/アーティスト/波形/ジャケットを問い合わせるには、
         // VirtualCdjが1〜4番のプレイヤー番号を借用できる必要がある(実機CDJで確認済み。
@@ -112,7 +122,7 @@ class Receiver {
 
         metadataFinder.start()
         timeFinder.start()
-        waveformFinder.setColorPreferred(true)
+        waveformFinder.setPreferredStyle(waveformStyle)
         // 高解像度波形(WaveformDetail)も取得する。プレビューと違いOSCでは配信せず、
         // Overlay(HTTP)経由でのみ使うため、UDPパケットサイズの制約は関係ない。
         waveformFinder.setFindDetails(true)
@@ -170,6 +180,7 @@ class Receiver {
                 ByteArray(buf.remaining()).also { buf.duplicate().get(it) }
             },
             waveformDetailColor = waveformDetail?.isColor ?: false,
+            waveformDetailObject = waveformDetail,
             artwork = art?.rawBytes?.let { buf ->
                 ByteArray(buf.remaining()).also { buf.duplicate().get(it) }
             },

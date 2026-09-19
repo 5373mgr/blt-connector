@@ -62,6 +62,14 @@
     color: #999;
     font-size: 11px;
   }
+  .box.waveform-box {
+    background: #2a3444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9fc4e8;
+    font-size: 11px;
+  }
   .box.text-box {
     display: flex;
     align-items: center;
@@ -227,6 +235,7 @@
       <div class="add-row">
         <button id="addTextButton" type="button">+ テキストを追加</button>
         <button id="addImageButton" type="button">+ ジャケット画像を追加</button>
+        <button id="addWaveformButton" type="button">+ 波形を追加</button>
       </div>
       <div id="panels"></div>
       <div id="fontUpload">
@@ -437,19 +446,23 @@
     canvas.innerHTML = "";
     layout.elements.forEach((cfg) => {
       const box = document.createElement("div");
-      box.className = "box " + (cfg.type === "image" ? "image-box" : "text-box");
+      const boxClass = cfg.type === "image" ? "image-box" : cfg.type === "waveform" ? "waveform-box" : "text-box";
+      box.className = "box " + boxClass;
       box.id = "box-" + cfg.id;
       box.dataset.id = cfg.id;
 
       const label = document.createElement("div");
       label.className = "label";
-      label.textContent = cfg.type === "image" ? "ジャケット (" + cfg.variable + ")" : "テキスト";
+      label.textContent = cfg.type === "image" ? "ジャケット (" + cfg.variable + ")" :
+        cfg.type === "waveform" ? "波形 (" + cfg.variable + ")" : "テキスト";
       box.appendChild(label);
 
       if (cfg.type === "text") {
         const textSpan = document.createElement("span");
         textSpan.textContent = applyTemplate(cfg.template || "", effectiveVars());
         box.appendChild(textSpan);
+      } else if (cfg.type === "waveform") {
+        box.appendChild(document.createTextNode("波形"));
       } else {
         box.appendChild(document.createTextNode("ジャケット"));
       }
@@ -574,9 +587,10 @@
       panel.className = "element-panel";
       panel.id = "panel-" + cfg.id;
       const isText = cfg.type === "text";
+      const panelTitle = isText ? "テキスト" : cfg.type === "waveform" ? "波形" : "ジャケット画像";
       panel.innerHTML = `
         <div class="panel-head">
-          <strong>${isText ? "テキスト" : "ジャケット画像"}</strong>
+          <strong>${panelTitle}</strong>
           <button class="delete-button" type="button" data-action="delete">削除</button>
         </div>
         ${isText ? `
@@ -678,8 +692,21 @@
     renderAll();
   }
 
+  function addWaveformElement() {
+    pushUndo();
+    layout.elements.push({
+      id: "wave" + nextId++,
+      type: "waveform",
+      variable: "onair",
+      x: 5, y: 90, width: 90, height: 8,
+      visible: true,
+    });
+    renderAll();
+  }
+
   document.getElementById("addTextButton").addEventListener("click", addTextElement);
   document.getElementById("addImageButton").addEventListener("click", addImageElement);
+  document.getElementById("addWaveformButton").addEventListener("click", addWaveformElement);
 
   function renderVariableReference() {
     const container = document.getElementById("variableList");

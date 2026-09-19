@@ -18,6 +18,11 @@ data class Config(
     val webGuiPort: Int = 8081,
     /** CarabinerBridge(Ableton Link)がCarabinerバイナリと通信するローカルポート。 */
     val carabinerPort: Int = 17000,
+    /**
+     * 波形の取得方式("RGB"=色波形, "THREE_BAND"=3Band波形)。beat-linkの`WaveformFinder`は
+     * アプリ全体でどちらか一方しか同時に扱えない(デッキ毎/要素毎の切り替えは不可)。
+     */
+    val waveformStyle: String = "RGB",
     val destinations: List<DestinationConfig> = emptyList(),
 ) {
     fun toJson(): String {
@@ -26,6 +31,7 @@ data class Config(
             put("overlayPort", overlayPort)
             put("webGuiPort", webGuiPort)
             put("carabinerPort", carabinerPort)
+            put("waveformStyle", waveformStyle)
             put("destinations", JSONArray(destinations.map {
                 JSONObject().apply {
                     put("name", it.name)
@@ -48,6 +54,7 @@ data class Config(
                     overlayPort = json.optInt("overlayPort", 8090),
                     webGuiPort = json.optInt("webGuiPort", 8081),
                     carabinerPort = json.optInt("carabinerPort", 17000),
+                    waveformStyle = json.optString("waveformStyle", "RGB").takeIf { it == "THREE_BAND" } ?: "RGB",
                     destinations = json.optJSONArray("destinations")?.let { arr ->
                         (0 until arr.length()).map { i ->
                             val d = arr.getJSONObject(i)

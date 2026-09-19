@@ -5,6 +5,7 @@ import bltconnector.core.overlay.OverlayServer
 import bltconnector.core.receiver.Receiver
 import bltconnector.core.sender.Destination
 import bltconnector.core.sender.Sender
+import org.deepsymmetry.beatlink.data.WaveformFinder
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.net.Inet4Address
@@ -85,9 +86,16 @@ fun main(args: Array<String>) {
         config.carabinerPort,
     )
 
+    val waveformStyle = if (config.waveformStyle == "THREE_BAND") {
+        WaveformFinder.WaveformStyle.THREE_BAND
+    } else {
+        WaveformFinder.WaveformStyle.RGB
+    }
+    logger.info("波形取得方式: {}", waveformStyle)
+
     Thread({
         logger.info("Receiver starting; waiting for Pro DJ Link devices...")
-        receiver.start()
+        receiver.start(waveformStyle)
     }, "Receiver Startup").apply { isDaemon = true }.start()
 
     val scheduler = Executors.newSingleThreadScheduledExecutor()
