@@ -53,6 +53,8 @@ class OverlayServer(
     private val trackVersions = ConcurrentHashMap<Int, Int>()
     private val lastTrackKey = ConcurrentHashMap<Int, Any>()
     private val latestDeck = ConcurrentHashMap<Int, DeckSnapshot>()
+    private val fontLibrary = FontLibrary(assetsDir)
+    private val layoutStore = LayoutStore(assetsDir)
 
     private val bundledIndexHtml: ByteArray by lazy {
         OverlayServer::class.java.getResourceAsStream("/overlay/index.html")?.use { it.readBytes() }
@@ -188,13 +190,8 @@ class OverlayServer(
         }
     }
 
-    private fun layoutFile() = File(assetsDir, "overlay-layout.json")
-
-    private fun handleGetLayout(): Response {
-        val file = layoutFile()
-        val json = if (file.isFile) file.readText() else DEFAULT_LAYOUT_JSON
-        return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", json)
-    }
+    private fun handleGetLayout(): Response =
+        NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", layoutStore.load())
 
     private fun handleSaveLayout(session: IHTTPSession): Response {
         val body = HashMap<String, String>()
@@ -204,49 +201,15 @@ class OverlayServer(
             return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "invalid request: ${e.message}")
         }
         val content = body["postData"]
-        if (content == null) {
-            return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "empty body")
+            ?: return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "empty body")
+        if (!layoutStore.save(content)) {
+            return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "invalid json")
         }
-        try {
-            JSONObject(content)
-        } catch (e: Exception) {
-            return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "invalid json: ${e.message}")
-        }
-        File(assetsDir).mkdirs()
-        layoutFile().writeText(content)
         return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", "{\"ok\":true}")
     }
 
-    private fun fontsDir() = File(assetsDir, "fonts").apply { mkdirs() }
-
-    private fun fontsListFile() = File(fontsDir(), "fonts.json")
-
-    private data class FontEntry(val file: String, val name: String)
-
-    private fun loadFontList(): List<FontEntry> {
-        val file = fontsListFile()
-        if (!file.isFile) return emptyList()
-        return try {
-            val arr = JSONArray(file.readText())
-            (0 until arr.length()).map { i ->
-                val obj = arr.getJSONObject(i)
-                FontEntry(obj.getString("file"), obj.getString("name"))
-            }
-        } catch (e: Exception) {
-            logger.warn("フォント一覧の読み込みに失敗しました", e)
-            emptyList()
-        }
-    }
-
-    private fun saveFontList(list: List<FontEntry>) {
-        val arr = JSONArray(list.map { JSONObject().apply { put("file", it.file); put("name", it.name) } })
-        fontsListFile().writeText(arr.toString())
-    }
-
-    private fun handleListFonts(): Response {
-        val json = JSONArray(loadFontList().map { JSONObject().apply { put("file", it.file); put("name", it.name) } })
-        return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", json.toString())
-    }
+    private fun handleListFonts(): Response =
+        NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", fontLibrary.listAsJson().toString())
 
     /**
      * フォントファイルをアップロードして登録する。クライアントが送るファイル名は信用せず、
@@ -262,47 +225,19 @@ class OverlayServer(
         val displayName = session.parameters["name"]?.firstOrNull()?.trim().orEmpty().ifBlank { "custom-font" }
         val tempPath = files["fontFile"]
             ?: return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "no file uploaded")
-        val tempFile = File(tempPath)
-        val magic = tempFile.inputStream().use { it.readNBytes(4) }
-        val ext = detectFontExtension(magic)
+        val entry = fontLibrary.register(File(tempPath), displayName)
             ?: return NanoHTTPD.newFixedLengthResponse(Response.Status.BAD_REQUEST, NanoHTTPD.MIME_PLAINTEXT, "unsupported font file")
-
-        val fileName = "font-${System.currentTimeMillis()}.$ext"
-        tempFile.copyTo(File(fontsDir(), fileName), overwrite = true)
-
-        val updated = loadFontList() + FontEntry(fileName, displayName)
-        saveFontList(updated)
-
-        val result = JSONObject().apply { put("file", fileName); put("name", displayName) }
-        return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", result.toString())
-    }
-
-    private fun detectFontExtension(magic: ByteArray): String? {
-        if (magic.size < 4) return null
-        return when {
-            magic.contentEquals(byteArrayOf(0x77, 0x4f, 0x46, 0x32)) -> "woff2" // "wOF2"
-            magic.contentEquals(byteArrayOf(0x77, 0x4f, 0x46, 0x46)) -> "woff" // "wOFF"
-            magic.contentEquals(byteArrayOf(0x4f, 0x54, 0x54, 0x4f)) -> "otf" // "OTTO"
-            magic.contentEquals(byteArrayOf(0x00, 0x01, 0x00, 0x00)) -> "ttf"
-            else -> null
-        }
+        return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, "application/json", entry.toJson().toString())
     }
 
     private fun handleFontFile(fileName: String): Response {
-        val dir = fontsDir()
-        val file = File(dir, fileName)
-        if (!file.canonicalPath.startsWith(dir.canonicalPath) || !file.isFile) {
-            return NanoHTTPD.newFixedLengthResponse(Response.Status.NOT_FOUND, NanoHTTPD.MIME_PLAINTEXT, "not found")
-        }
-        val contentType = when (file.extension.lowercase()) {
-            "woff2" -> "font/woff2"
-            "woff" -> "font/woff"
-            "otf" -> "font/otf"
-            "ttf" -> "font/ttf"
-            else -> "application/octet-stream"
-        }
+        val file = fontLibrary.fileFor(fileName)
+            ?: return NanoHTTPD.newFixedLengthResponse(Response.Status.NOT_FOUND, NanoHTTPD.MIME_PLAINTEXT, "not found")
         val bytes = file.readBytes()
-        return NanoHTTPD.newFixedLengthResponse(Response.Status.OK, contentType, ByteArrayInputStream(bytes), bytes.size.toLong())
+        return NanoHTTPD.newFixedLengthResponse(
+            Response.Status.OK, FontLibrary.contentTypeFor(file),
+            ByteArrayInputStream(bytes), bytes.size.toLong(),
+        )
     }
 
     /** デッキ1台分の最新状態を全WebSocketクライアントへ配信する。 */
@@ -411,15 +346,5 @@ class OverlayServer(
     private companion object {
         /** [lastTrackKey]で「曲情報なし」を表すためのセンチネル(ConcurrentHashMapはnull値を格納できないため)。 */
         val NO_TRACK = Any()
-
-        val DEFAULT_LAYOUT_JSON = """
-            {"elements":[
-              {"id":"art1","type":"image","variable":"onair","x":2,"y":68,"width":12,"height":21,"visible":true},
-              {"id":"text1","type":"text","template":"{onair-track-name}","x":15,"y":70,"width":50,"height":8,"fontFamily":"sans-serif","fontSize":28,"color":"#ffffff","visible":true},
-              {"id":"text2","type":"text","template":"{onair-artist-name}","x":15,"y":78,"width":50,"height":6,"fontFamily":"sans-serif","fontSize":18,"color":"#cccccc","visible":true},
-              {"id":"text3","type":"text","template":"{onair-album-name}","x":15,"y":85,"width":50,"height":6,"fontFamily":"sans-serif","fontSize":16,"color":"#aaaaaa","visible":true},
-              {"id":"text4","type":"text","template":"{onair-comment}","x":15,"y":91,"width":50,"height":6,"fontFamily":"sans-serif","fontSize":16,"color":"#9fe870","visible":true}
-            ]}
-        """.trimIndent()
     }
 }
