@@ -195,7 +195,7 @@
 <body>
   <div id="app">
     <div id="canvasWrap">
-      <h2 style="font-size:14px;">プレビュー(16:9、サンプル値での見た目)</h2>
+      <h2 style="font-size:14px;">プレビュー(16:9。PDLから実データを取得できている項目は実際の値、それ以外はサンプル値で表示)</h2>
       <div id="canvas"></div>
       <div id="variableReference">
         <h2 style="font-size:14px;">利用可能な変数(クリックでコピー、テンプレート欄に貼り付けて使えます)</h2>
@@ -269,6 +269,44 @@
   let fonts = [];
   let selectedId = null;
   let nextId = 1;
+
+  // 実際にPDLからデータを受信できている項目はそちらを優先し、まだ値が無い項目だけ
+  // サンプル値で埋める(実機が無くてもレイアウト編集はできるようにするため)。
+  let liveVars = {};
+
+  function effectiveVars() {
+    const merged = Object.assign({}, SAMPLE_VARS);
+    Object.keys(liveVars).forEach((key) => {
+      const value = liveVars[key];
+      if (value !== "" && value !== undefined && value !== null) merged[key] = value;
+    });
+    return merged;
+  }
+
+  function connectLiveVars() {
+    const ws = new WebSocket("ws://" + location.host + "/ws");
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        liveVars = data.vars || {};
+        refreshPreviewText();
+      } catch (e) {
+        console.error("failed to parse live overlay update", e);
+      }
+    };
+    ws.onclose = () => setTimeout(connectLiveVars, 1000);
+    ws.onerror = () => ws.close();
+  }
+
+  /** 既存のボックスのテキストだけを更新する(ドラッグ操作等を邪魔しないよう再描画はしない)。 */
+  function refreshPreviewText() {
+    layout.elements.forEach((cfg) => {
+      if (cfg.type !== "text") return;
+      const box = document.getElementById("box-" + cfg.id);
+      const span = box && box.querySelector("span");
+      if (span) span.textContent = applyTemplate(cfg.template || "", effectiveVars());
+    });
+  }
 
   // --- Undo/Redo ---
   let undoStack = [];
@@ -402,7 +440,7 @@
 
       if (cfg.type === "text") {
         const textSpan = document.createElement("span");
-        textSpan.textContent = applyTemplate(cfg.template || "", SAMPLE_VARS);
+        textSpan.textContent = applyTemplate(cfg.template || "", effectiveVars());
         box.appendChild(textSpan);
       } else {
         box.appendChild(document.createTextNode("ジャケット"));
@@ -572,7 +610,7 @@
           if (field === "template") {
             const box = document.getElementById("box-" + cfg.id);
             const span = box && box.querySelector("span");
-            if (span) span.textContent = applyTemplate(cfg.template || "", SAMPLE_VARS);
+            if (span) span.textContent = applyTemplate(cfg.template || "", effectiveVars());
           }
         });
       });
@@ -591,7 +629,7 @@
           cfg.template = textarea.value;
           const box = document.getElementById("box-" + cfg.id);
           const span = box && box.querySelector("span");
-          if (span) span.textContent = applyTemplate(cfg.template, SAMPLE_VARS);
+          if (span) span.textContent = applyTemplate(cfg.template, effectiveVars());
           textarea.focus();
         });
       }
@@ -717,6 +755,7 @@
   Promise.all([loadFonts(), loadLayout()]).then(() => {
     renderAll();
     renderVariableReference();
+    connectLiveVars();
   });
 })();
 </script>
