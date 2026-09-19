@@ -9,7 +9,7 @@
     padding: 0;
     width: 100%;
     height: 100%;
-    background: transparent; /* OBS Browser Sourceで透過させる */
+    background: transparent; /* 既定はOBS Browser Source向けに透過。layout.backgroundColorで上書き可能 */
     overflow: hidden;
     font-family: "Segoe UI", "Hiragino Sans", sans-serif;
     color: #fff;
@@ -25,6 +25,8 @@
     margin: 0;
     opacity: 0;
     pointer-events: none;
+    --rot: 0deg;
+    transform: rotate(var(--rot));
   }
   .element.visible { opacity: 1; }
   .element.image-element {
@@ -52,19 +54,19 @@
   }
   #stage.transition-slide-up .element {
     transition: opacity var(--t-dur) ease, transform var(--t-dur) ease;
-    transform: translateY(6%);
+    transform: translateY(6%) rotate(var(--rot));
   }
-  #stage.transition-slide-up .element.visible { transform: translateY(0); }
+  #stage.transition-slide-up .element.visible { transform: rotate(var(--rot)); }
   #stage.transition-slide-left .element {
     transition: opacity var(--t-dur) ease, transform var(--t-dur) ease;
-    transform: translateX(-4%);
+    transform: translateX(-4%) rotate(var(--rot));
   }
-  #stage.transition-slide-left .element.visible { transform: translateX(0); }
+  #stage.transition-slide-left .element.visible { transform: rotate(var(--rot)); }
   #stage.transition-zoom .element {
     transition: opacity var(--t-dur) ease, transform var(--t-dur) ease;
-    transform: scale(0.85);
+    transform: scale(0.85) rotate(var(--rot));
   }
-  #stage.transition-zoom .element.visible { transform: scale(1); }
+  #stage.transition-zoom .element.visible { transform: rotate(var(--rot)); }
   #stage.transition-none .element {
     transition: none;
   }
@@ -124,6 +126,9 @@
     // 新しい曲を検知してから、実際に表示を切り替えるまで待つ時間(チラつき防止)。
     holdMs = Math.max(0, Number(layout.holdSeconds) || 0) * 1000;
 
+    // OBSでは透過(既定)、ブラウザ単体での確認等では任意の背景色を設定できる。
+    document.body.style.background = layout.backgroundColor || "transparent";
+
     (layout.elements || []).forEach((cfg) => {
       const tag = cfg.type === "image" ? "img" : cfg.type === "waveform" ? "canvas" : "div";
       const el = document.createElement(tag);
@@ -134,6 +139,7 @@
       el.style.top = cfg.y + "%";
       el.style.width = cfg.width + "%";
       el.style.height = cfg.height + "%";
+      el.style.setProperty("--rot", (Number(cfg.rotation) || 0) + "deg");
       if (cfg.type === "text") {
         el.style.fontFamily = cfg.fontFamily || "sans-serif";
         el.style.fontSize = (cfg.fontSize || 16) + "px";
@@ -352,8 +358,9 @@
 
     const playerNumber = vars[cfg.variable + "-player-number"];
     state.pendingKey = desiredKey;
-    const width = Math.max(50, Math.round(el.getBoundingClientRect().width) || 300);
-    fetch("/waveform-render/deck/" + playerNumber + "?width=" + width)
+    // 再生位置に追従してスクロールする表示窓は自前で切り出すため、常にネイティブ解像度
+    // (scale=1)で丸ごと取得する(1曲につき1回だけのフェッチなのでサイズは問題にならない)。
+    fetch("/waveform-render/deck/" + playerNumber + "?scale=1")
       .then((res) => {
         if (!res.ok) throw new Error("waveform not ready");
         return res.json();
@@ -386,7 +393,59 @@
     ctx.globalAlpha = 1;
   }
 
-  function drawWaveformCanvas(canvas, data, positionMs, durationMs) {
+  function drawWaveformBars(ctx, segments, start, end, isThreeBand, colors, barWidth, h, xOffset) {
+    for (let i = start; i < end; i++) {
+      const seg = segments[i];
+      const x = (i - start) * barWidth + xOffset;
+      if (isThreeBand) {
+        drawWaveformBar(ctx, x, barWidth, seg[0], colors[0], h, 0.85);
+        drawWaveformBar(ctx, x, barWidth, seg[1], colors[1], h, 0.85);
+        drawWaveformBar(ctx, x, barWidth, seg[2], colors[2], h, 0.85);
+      } else {
+        drawWaveformBar(ctx, x, barWidth, seg[0], seg[1], h, 1);
+      }
+    }
+  }
+
+  function drawPlayhead(ctx, x, h) {
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(Math.max(0, x - 1), 0, 2, h);
+  }
+
+  /** 中心の水平線と、見やすい間隔(1/2/5/10/15/30/60...秒)に自動調整した縦の目盛り線を描く。 */
+  function drawWaveformGrid(ctx, w, h, startSec, endSec) {
+    ctx.strokeStyle = "rgba(255,255,255,0.15)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h / 2);
+    ctx.lineTo(w, h / 2);
+    ctx.stroke();
+
+    const span = endSec - startSec;
+    if (span <= 0) return;
+    const candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+    let interval = candidates[candidates.length - 1];
+    for (const c of candidates) {
+      if (span / c <= 12) { interval = c; break; }
+    }
+    const firstTick = Math.ceil(startSec / interval) * interval;
+    for (let t = firstTick; t <= endSec; t += interval) {
+      const x = ((t - startSec) / span) * w;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+    }
+  }
+
+  /**
+   * 波形を描画する。[windowSeconds]が0以下、またはdurationMsが不明な場合は従来通り
+   * 曲全体をキャンバス幅に収めて表示する(荒い間引きで十分な軽さの概観表示)。
+   * [windowSeconds]が正の値の場合は、再生位置が常にキャンバス中央に来るよう、
+   * その秒数ぶんの範囲だけを切り出してスクロール表示する(CDJ風)。曲の先頭/終端
+   * 付近では窓が切り詰められ、プレイヘッドは中央からずれる(トラック境界でクランプするため)。
+   */
+  function drawWaveformCanvas(canvas, data, positionMs, durationMs, windowSeconds, showGrid) {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(rect.width * dpr));
@@ -398,27 +457,60 @@
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, w, h);
     const segments = data.segments || [];
-    const n = segments.length;
-    if (n === 0) return;
-    const barWidth = w / n;
+    const frameCount = segments.length;
+    if (frameCount === 0) return;
     const isThreeBand = data.style === "THREE_BAND";
-    for (let i = 0; i < n; i++) {
-      const seg = segments[i];
-      const x = i * barWidth;
-      if (isThreeBand) {
-        drawWaveformBar(ctx, x, barWidth, seg[0], data.colors[0], h, 0.85);
-        drawWaveformBar(ctx, x, barWidth, seg[1], data.colors[1], h, 0.85);
-        drawWaveformBar(ctx, x, barWidth, seg[2], data.colors[2], h, 0.85);
-      } else {
-        drawWaveformBar(ctx, x, barWidth, seg[0], seg[1], h, 1);
+
+    if (!windowSeconds || windowSeconds <= 0 || !(durationMs > 0)) {
+      // 曲全体を表示(間引いて軽量化)
+      if (showGrid) drawWaveformGrid(ctx, w, h, 0, durationMs > 0 ? durationMs / 1000 : frameCount);
+      const step = Math.max(1, Math.floor(frameCount / w));
+      const visibleCount = Math.ceil(frameCount / step);
+      const barWidth = w / visibleCount;
+      let col = 0;
+      for (let i = 0; i < frameCount; i += step) {
+        const seg = segments[i];
+        const x = col * barWidth;
+        if (isThreeBand) {
+          drawWaveformBar(ctx, x, barWidth, seg[0], data.colors[0], h, 0.85);
+          drawWaveformBar(ctx, x, barWidth, seg[1], data.colors[1], h, 0.85);
+          drawWaveformBar(ctx, x, barWidth, seg[2], data.colors[2], h, 0.85);
+        } else {
+          drawWaveformBar(ctx, x, barWidth, seg[0], seg[1], h, 1);
+        }
+        col++;
       }
+      if (durationMs > 0) {
+        drawPlayhead(ctx, (Math.max(0, Math.min(1, positionMs / durationMs))) * w, h);
+      }
+      return;
     }
-    if (durationMs > 0) {
-      const ratio = Math.max(0, Math.min(1, positionMs / durationMs));
-      const px = ratio * w;
-      ctx.fillStyle = "rgba(255,255,255,0.9)";
-      ctx.fillRect(Math.max(0, px - 1), 0, 2, h);
+
+    const framesPerMs = frameCount / durationMs;
+    const windowFrames = Math.max(2, Math.round(windowSeconds * 1000 * framesPerMs));
+    const centerFrame = positionMs * framesPerMs;
+    let start = Math.round(centerFrame - windowFrames / 2);
+    let end = start + windowFrames;
+    if (start < 0) {
+      end -= start;
+      start = 0;
     }
+    if (end > frameCount) {
+      start -= (end - frameCount);
+      end = frameCount;
+    }
+    start = Math.max(0, start);
+    end = Math.min(frameCount, end);
+
+    // barWidthは窓の全長(windowFrames)基準にする。境界でクランプされていても
+    // 見た目のスケール(1フレームあたりの幅)が変わらないようにするため。
+    const barWidth = w / windowFrames;
+    if (showGrid) {
+      const secondsPerFrame = durationMs / 1000 / frameCount;
+      drawWaveformGrid(ctx, w, h, start * secondsPerFrame, (start + windowFrames) * secondsPerFrame);
+    }
+    drawWaveformBars(ctx, segments, start, end, isThreeBand, data.colors || [], barWidth, h, 0);
+    drawPlayhead(ctx, (centerFrame - start) * barWidth, h);
   }
 
   /** 波形要素のプレイヘッドを滑らかに動かすため、サーバーの送信間隔(100ms)に頼らず
@@ -432,7 +524,7 @@
       if (!el || !data || !posInfo || !el.classList.contains("visible")) return;
       let estimatedMs = posInfo.positionMs;
       if (posInfo.playing) estimatedMs += now - posInfo.receivedAt;
-      drawWaveformCanvas(el, data, estimatedMs, posInfo.durationMs);
+      drawWaveformCanvas(el, data, estimatedMs, posInfo.durationMs, Number(cfg.windowSeconds) || 0, cfg.showGrid === true);
     });
     requestAnimationFrame(waveformAnimationLoop);
   }

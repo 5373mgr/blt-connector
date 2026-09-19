@@ -211,15 +211,18 @@ class OverlayServer(
      * (呼び出し側が生バイト列の形式を知らなくても)正しく描画できる。3Bandは単一の色を持たず
      * 帯域ごとに固定色で描く仕様のため、`segments`各要素が[low,mid,high]の3値になり、
      * `colors`にその3色(`WaveformFinder.ThreeBandLayer`の色)を別途載せる。
-     * [width]は描画したい列数の目安(既定300、10〜2000にクランプ)で、実際の`scale`
-     * (何フレームを1列に平均するか)はフレーム数から逆算する。
+     * [width]は描画したい列数の目安(既定300、10〜200000にクランプ)で、実際の`scale`
+     * (何フレームを1列に平均するか)はフレーム数から逆算する。[scale]を明示的に指定すると
+     * そちらを優先する(再生位置に追従してスクロールする波形要素は、自前で表示窓を切り出す
+     * ためscale=1のネイティブ解像度を丸ごと要求する)。
      */
     private fun handleWaveformRender(playerNumber: Int, session: IHTTPSession): Response {
         val detail = latestWaveformDetailObject[playerNumber]
             ?: return NanoHTTPD.newFixedLengthResponse(Response.Status.NOT_FOUND, NanoHTTPD.MIME_PLAINTEXT, "no waveform detail")
-        val width = session.parameters["width"]?.firstOrNull()?.toIntOrNull()?.coerceIn(10, 2000) ?: 300
         val frameCount = detail.frameCount
-        val scale = if (frameCount > 0) maxOf(1, frameCount / width) else 1
+        val explicitScale = session.parameters["scale"]?.firstOrNull()?.toIntOrNull()?.coerceAtLeast(1)
+        val width = session.parameters["width"]?.firstOrNull()?.toIntOrNull()?.coerceIn(10, 200_000) ?: 300
+        val scale = explicitScale ?: (if (frameCount > 0) maxOf(1, frameCount / width) else 1)
         val segments = JSONArray()
         var segment = 0
         while (segment < frameCount) {

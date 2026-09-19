@@ -108,6 +108,17 @@
     cursor: pointer;
     font-size: 11px;
   }
+  .element-panel .panel-head-buttons { display: flex; align-items: center; gap: 4px; }
+  .element-panel .layer-button {
+    background: none;
+    border: 1px solid #444;
+    color: #ccc;
+    border-radius: 4px;
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .element-panel .layer-button:hover { border-color: #9fe870; }
   .element-panel label {
     display: block;
     font-size: 11px;
@@ -144,7 +155,7 @@
   }
   .element-panel .visible-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
   .element-panel .visible-row label { margin: 0; }
-  #fontUpload, #transitionSettings {
+  #fontUpload, #transitionSettings, #backgroundSettings {
     background: #1f2229;
     border-radius: 8px;
     padding: 10px 12px;
@@ -155,14 +166,17 @@
     box-sizing: border-box;
     margin-top: 6px;
   }
-  #transitionSettings label {
+  #transitionSettings label,
+  #backgroundSettings label {
     display: block;
     font-size: 11px;
     color: #999;
     margin-top: 8px;
   }
   #transitionSettings select,
-  #transitionSettings input[type=number] {
+  #transitionSettings input[type=number],
+  #backgroundSettings select,
+  #backgroundSettings input[type=color] {
     width: 100%;
     box-sizing: border-box;
     background: #14161a;
@@ -173,6 +187,11 @@
     margin-top: 2px;
     font-family: inherit;
   }
+  #backgroundSettings .checkbox-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+  #backgroundSettings .checkbox-row label { margin: 0; }
+  #previewPositionRow { margin-top: 8px; }
+  #previewPositionRow label { display: block; font-size: 12px; color: #999; margin-bottom: 4px; }
+  #previewPositionRow input[type=range] { width: 100%; }
   #saveButton {
     width: 100%;
     padding: 10px;
@@ -206,6 +225,10 @@
     <div id="canvasWrap">
       <h2 style="font-size:14px;">プレビュー(16:9。PDLから実データを取得できている項目は実際の値、それ以外はサンプル値で表示)</h2>
       <div id="canvas"></div>
+      <div id="previewPositionRow">
+        <label>波形プレビューの再生位置(確認用、保存されません)</label>
+        <input type="range" id="previewPosition" min="0" max="1000" value="300">
+      </div>
       <div id="variableReference">
         <h2 style="font-size:14px;">利用可能な変数(クリックでコピー、テンプレート欄に貼り付けて使えます)</h2>
         <div id="variableList"></div>
@@ -230,6 +253,15 @@
         </select>
         <label>切り替わるまでの保持時間(秒)</label>
         <input type="number" id="holdSeconds" min="0" max="30" step="0.5" value="0">
+      </div>
+      <div id="backgroundSettings">
+        <h2 style="margin-top:0;">背景</h2>
+        <div class="checkbox-row">
+          <input type="checkbox" id="backgroundTransparent" checked>
+          <label for="backgroundTransparent">透過にする(OBS向け、既定)</label>
+        </div>
+        <label>背景色</label>
+        <input type="color" id="backgroundColorInput" value="#000000" disabled>
       </div>
       <h2>要素</h2>
       <div class="add-row">
@@ -281,6 +313,18 @@
   let fonts = [];
   let selectedId = null;
   let nextId = 1;
+
+  // 波形プレビュー用のダミー波形(実データは無いので、レイアウト確認用に一度だけ生成する固定パターン)。
+  const FAKE_DURATION_MS = 200000;
+  const FAKE_WAVEFORM = (function () {
+    const arr = [];
+    for (let i = 0; i < 3000; i++) {
+      const raw = 15 + 12 * Math.sin(i * 0.03) + 6 * Math.sin(i * 0.11) + (Math.random() - 0.5) * 6;
+      arr.push([Math.min(31, Math.max(0, Math.round(raw))), "#6dabff"]);
+    }
+    return arr;
+  })();
+  let previewPositionRatio = 0.3;
 
   // 実際にPDLからデータを受信できている項目はそちらを優先し、まだ値が無い項目だけ
   // サンプル値で埋める(実機が無くてもレイアウト編集はできるようにするため)。
@@ -374,6 +418,107 @@
     );
   }
 
+  /**
+   * 波形要素のプレビューを描く(実データが無いためダミー波形+スクラバーで確認する)。
+   * index.htmlの`drawWaveformCanvas`と同じ考え方(表示方式が「曲全体」ならキャンバス幅に
+   * 収め、秒数指定ならその範囲を再生位置中心に切り出す)をダミーデータに対して行うだけの
+   * 簡易版。共有モジュールが無い構成のため、ロジックはindex.html側と別々に持つ。
+   */
+  function drawEditorWaveformPreview(canvas, cfg) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, w, h);
+    const segments = FAKE_WAVEFORM;
+    const frameCount = segments.length;
+    const positionMs = previewPositionRatio * FAKE_DURATION_MS;
+    const windowSeconds = Number(cfg.windowSeconds) || 0;
+
+    function drawBar(x, barWidth, height31, color) {
+      const ratio = Math.max(0, Math.min(31, height31)) / 31;
+      const barHeight = ratio * h;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, (h - barHeight) / 2, Math.max(1, barWidth - 0.5), barHeight);
+    }
+    function drawGrid(startSec, endSec) {
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.beginPath();
+      ctx.moveTo(0, h / 2);
+      ctx.lineTo(w, h / 2);
+      ctx.stroke();
+      const span = endSec - startSec;
+      if (span <= 0) return;
+      const candidates = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+      let interval = candidates[candidates.length - 1];
+      for (const c of candidates) {
+        if (span / c <= 12) { interval = c; break; }
+      }
+      const first = Math.ceil(startSec / interval) * interval;
+      for (let t = first; t <= endSec; t += interval) {
+        const x = ((t - startSec) / span) * w;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+    }
+    function drawPlayheadAt(x) {
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fillRect(Math.max(0, x - 1), 0, 2, h);
+    }
+
+    if (!windowSeconds || windowSeconds <= 0) {
+      if (cfg.showGrid) drawGrid(0, FAKE_DURATION_MS / 1000);
+      const barWidth = w / frameCount;
+      for (let i = 0; i < frameCount; i++) drawBar(i * barWidth, barWidth, segments[i][0], segments[i][1]);
+      drawPlayheadAt((positionMs / FAKE_DURATION_MS) * w);
+      return;
+    }
+
+    const framesPerMs = frameCount / FAKE_DURATION_MS;
+    const windowFrames = Math.max(2, Math.round(windowSeconds * 1000 * framesPerMs));
+    const centerFrame = positionMs * framesPerMs;
+    let start = Math.round(centerFrame - windowFrames / 2);
+    let end = start + windowFrames;
+    if (start < 0) {
+      end -= start;
+      start = 0;
+    }
+    if (end > frameCount) {
+      start -= (end - frameCount);
+      end = frameCount;
+    }
+    start = Math.max(0, start);
+    end = Math.min(frameCount, end);
+    const barWidth = w / windowFrames;
+    if (cfg.showGrid) {
+      const secondsPerFrame = FAKE_DURATION_MS / 1000 / frameCount;
+      drawGrid(start * secondsPerFrame, (start + windowFrames) * secondsPerFrame);
+    }
+    for (let i = start; i < end; i++) drawBar((i - start) * barWidth, barWidth, segments[i][0], segments[i][1]);
+    drawPlayheadAt((centerFrame - start) * barWidth);
+  }
+
+  function redrawWaveformPreviews() {
+    layout.elements.forEach((cfg) => {
+      if (cfg.type !== "waveform") return;
+      const box = document.getElementById("box-" + cfg.id);
+      const canvas = box && box.querySelector("canvas");
+      if (canvas) drawEditorWaveformPreview(canvas, cfg);
+    });
+  }
+
+  document.getElementById("previewPosition").addEventListener("input", (e) => {
+    previewPositionRatio = Number(e.target.value) / 1000;
+    redrawWaveformPreviews();
+  });
+
   function loadFonts() {
     return fetch("/fonts")
       .then((res) => res.json())
@@ -405,10 +550,16 @@
       .catch((e) => console.error("failed to load layout", e));
   }
 
-  function syncTransitionControls() {
+  function syncGlobalControls() {
     document.getElementById("transitionPattern").value = layout.transition || "fade";
     document.getElementById("transitionSpeed").value = String(layout.transitionMs || 450);
     document.getElementById("holdSeconds").value = String(layout.holdSeconds || 0);
+
+    const bg = layout.backgroundColor || "transparent";
+    const isTransparent = bg === "transparent";
+    document.getElementById("backgroundTransparent").checked = isTransparent;
+    document.getElementById("backgroundColorInput").disabled = isTransparent;
+    document.getElementById("backgroundColorInput").value = isTransparent ? "#000000" : bg;
   }
 
   document.getElementById("transitionPattern").addEventListener("change", (e) => {
@@ -424,6 +575,19 @@
     layout.holdSeconds = Math.max(0, Number(e.target.value) || 0);
   });
 
+  document.getElementById("backgroundTransparent").addEventListener("change", (e) => {
+    pushUndo();
+    const colorInput = document.getElementById("backgroundColorInput");
+    colorInput.disabled = e.target.checked;
+    layout.backgroundColor = e.target.checked ? "transparent" : colorInput.value;
+  });
+  document.getElementById("backgroundColorInput").addEventListener("focus", () => pushUndo());
+  document.getElementById("backgroundColorInput").addEventListener("input", (e) => {
+    if (!document.getElementById("backgroundTransparent").checked) {
+      layout.backgroundColor = e.target.value;
+    }
+  });
+
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
   function roleOptionsHtml(selected) {
@@ -436,7 +600,7 @@
   }
 
   function renderAll() {
-    syncTransitionControls();
+    syncGlobalControls();
     renderBoxes();
     renderPanels();
   }
@@ -462,7 +626,10 @@
         textSpan.textContent = applyTemplate(cfg.template || "", effectiveVars());
         box.appendChild(textSpan);
       } else if (cfg.type === "waveform") {
-        box.appendChild(document.createTextNode("波形"));
+        const waveCanvas = document.createElement("canvas");
+        waveCanvas.style.width = "100%";
+        waveCanvas.style.height = "100%";
+        box.appendChild(waveCanvas);
       } else {
         box.appendChild(document.createTextNode("ジャケット"));
       }
@@ -476,6 +643,10 @@
       makeDraggable(box, cfg.id);
       makeResizable(handle, cfg.id);
       box.addEventListener("pointerdown", () => selectElement(cfg.id));
+      if (cfg.type === "waveform") {
+        const waveCanvas = box.querySelector("canvas");
+        if (waveCanvas) drawEditorWaveformPreview(waveCanvas, cfg);
+      }
     });
   }
 
@@ -490,10 +661,14 @@
     box.style.width = cfg.width + "%";
     box.style.height = cfg.height + "%";
     box.style.opacity = cfg.visible === false ? "0.3" : "1";
+    box.style.transform = cfg.rotation ? "rotate(" + cfg.rotation + "deg)" : "";
     if (cfg.type === "text") {
       box.style.fontFamily = cfg.fontFamily || "sans-serif";
       box.style.fontSize = (cfg.fontSize || 16) + "px";
       box.style.color = cfg.color || "#ffffff";
+    } else if (cfg.type === "waveform") {
+      const waveCanvas = box.querySelector("canvas");
+      if (waveCanvas) drawEditorWaveformPreview(waveCanvas, cfg);
     }
   }
 
@@ -587,11 +762,20 @@
       panel.className = "element-panel";
       panel.id = "panel-" + cfg.id;
       const isText = cfg.type === "text";
-      const panelTitle = isText ? "テキスト" : cfg.type === "waveform" ? "波形" : "ジャケット画像";
+      const isWaveform = cfg.type === "waveform";
+      const panelTitle = isText ? "テキスト" : isWaveform ? "波形" : "ジャケット画像";
+      const windowSecondsValue = Number(cfg.windowSeconds) || 0;
+      const windowOptionsHtml = [0, 3, 5, 10, 15, 30].map((sec) =>
+        `<option value="${sec}"${sec === windowSecondsValue ? " selected" : ""}>${sec === 0 ? "曲全体(固定表示)" : sec + "秒"}</option>`
+      ).join("");
       panel.innerHTML = `
         <div class="panel-head">
           <strong>${panelTitle}</strong>
-          <button class="delete-button" type="button" data-action="delete">削除</button>
+          <div class="panel-head-buttons">
+            <button class="layer-button" type="button" data-action="layer-back" title="背面へ">▼ 背面</button>
+            <button class="layer-button" type="button" data-action="layer-front" title="前面へ">▲ 前面</button>
+            <button class="delete-button" type="button" data-action="delete">削除</button>
+          </div>
         </div>
         ${isText ? `
           <label>テンプレート文字列</label>
@@ -607,10 +791,21 @@
           <input type="number" data-field="fontSize" min="8" max="120" value="${cfg.fontSize || 16}">
           <label>文字色</label>
           <input type="color" data-field="color" value="${cfg.color || "#ffffff"}">
+        ` : isWaveform ? `
+          <label>表示するデッキ/役割</label>
+          <select data-field="variable">${roleOptionsHtml(cfg.variable)}</select>
+          <label>表示方式(再生位置に追従してスクロールする範囲)</label>
+          <select data-field="windowSeconds">${windowOptionsHtml}</select>
+          <div class="visible-row">
+            <input type="checkbox" data-field="showGrid" id="grid-${cfg.id}" ${cfg.showGrid ? "checked" : ""}>
+            <label for="grid-${cfg.id}">グリッドを表示する</label>
+          </div>
         ` : `
           <label>表示するデッキ/役割</label>
           <select data-field="variable">${roleOptionsHtml(cfg.variable)}</select>
         `}
+        <label>回転(度)</label>
+        <input type="number" data-field="rotation" min="-180" max="180" step="1" value="${cfg.rotation || 0}">
         <div class="visible-row">
           <input type="checkbox" data-field="visible" id="visible-${cfg.id}" ${cfg.visible !== false ? "checked" : ""}>
           <label for="visible-${cfg.id}">表示する</label>
@@ -621,10 +816,10 @@
         input.addEventListener("focus", () => pushUndo());
         input.addEventListener("input", () => {
           const field = input.dataset.field;
-          if (field === "visible") {
-            cfg.visible = input.checked;
-          } else if (field === "fontSize") {
-            cfg.fontSize = Number(input.value);
+          if (field === "visible" || field === "showGrid") {
+            cfg[field] = input.checked;
+          } else if (field === "fontSize" || field === "rotation" || field === "windowSeconds") {
+            cfg[field] = Number(input.value);
           } else {
             cfg[field] = input.value;
           }
@@ -636,6 +831,29 @@
           }
         });
       });
+
+      const layerBackButton = panel.querySelector('[data-action="layer-back"]');
+      if (layerBackButton) {
+        layerBackButton.addEventListener("click", () => {
+          const i = layout.elements.indexOf(cfg);
+          if (i <= 0) return;
+          pushUndo();
+          [layout.elements[i - 1], layout.elements[i]] = [layout.elements[i], layout.elements[i - 1]];
+          renderAll();
+          selectElement(cfg.id);
+        });
+      }
+      const layerFrontButton = panel.querySelector('[data-action="layer-front"]');
+      if (layerFrontButton) {
+        layerFrontButton.addEventListener("click", () => {
+          const i = layout.elements.indexOf(cfg);
+          if (i < 0 || i >= layout.elements.length - 1) return;
+          pushUndo();
+          [layout.elements[i], layout.elements[i + 1]] = [layout.elements[i + 1], layout.elements[i]];
+          renderAll();
+          selectElement(cfg.id);
+        });
+      }
 
       const insertButton = panel.querySelector('[data-action="insert-var"]');
       if (insertButton) {
@@ -698,6 +916,8 @@
       id: "wave" + nextId++,
       type: "waveform",
       variable: "onair",
+      windowSeconds: 10,
+      showGrid: false,
       x: 5, y: 90, width: 90, height: 8,
       visible: true,
     });
