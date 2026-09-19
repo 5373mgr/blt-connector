@@ -60,9 +60,22 @@ class Receiver {
      */
     fun start() {
         shouldRun = true
-        deviceFinder.start()
-        while (shouldRun && !virtualCdj.start()) {
-            logger.info("Pro DJ Linkデバイスが見つからないため、起動を再試行します...")
+        // MetadataFinderがdbserver経由でタイトル/アーティスト/波形/ジャケットを問い合わせるには、
+        // VirtualCdjが1〜4番のプレイヤー番号を借用できる必要がある(実機CDJで確認済み。
+        // これがfalseのままだと自己割り当て番号が7以上になり、メタデータ問い合わせが永久に失敗する)。
+        virtualCdj.setUseStandardPlayerNumber(true)
+        while (shouldRun) {
+            try {
+                deviceFinder.start()
+                if (virtualCdj.start()) break
+                logger.info("Pro DJ Linkデバイスが見つからないため、起動を再試行します...")
+            } catch (e: Exception) {
+                // DeviceFinder/VirtualCdjのソケットバインドは、Pro DJ Linkのポートを他プロセス
+                // (rekordbox等)が既に使っている場合にここで例外を投げる。リトライループの外側で
+                // 起きるとReceiver起動スレッドが静かに死んでしまうため、ここで捕捉して再試行する。
+                logger.warn("Receiverの起動に失敗しました。再試行します...", e)
+                Thread.sleep(2000)
+            }
         }
         if (!shouldRun) return
 
