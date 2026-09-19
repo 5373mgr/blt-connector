@@ -109,16 +109,16 @@
     font-size: 11px;
   }
   .element-panel .panel-head-buttons { display: flex; align-items: center; gap: 4px; }
-  .element-panel .layer-button {
-    background: none;
-    border: 1px solid #444;
-    color: #ccc;
-    border-radius: 4px;
-    padding: 2px 6px;
-    cursor: pointer;
-    font-size: 11px;
+  .element-panel .drag-handle {
+    cursor: grab;
+    color: #999;
+    font-size: 14px;
+    padding: 0 6px;
+    user-select: none;
   }
-  .element-panel .layer-button:hover { border-color: #9fe870; }
+  .element-panel .drag-handle:active { cursor: grabbing; }
+  .element-panel.dragging { opacity: 0.4; }
+  .element-panel.drag-over { border-top: 2px solid #9fe870; }
   .element-panel label {
     display: block;
     font-size: 11px;
@@ -284,6 +284,15 @@
 <script>
 (function () {
   const WEB_SAFE_FONTS = ["sans-serif", "serif", "monospace", "Segoe UI", "Hiragino Sans", "Meiryo"];
+
+  // フォントサイズは「1920x1080のステージを基準にした値」として扱う(index.html側と同じ考え方)。
+  // このプレビューcanvasは960x540固定(=1920x1080のちょうど半分)なので、実際のOverlayで
+  // 1920x1080相当の解像度で表示した場合と見た目の大きさが一致するよう、常に0.5倍で表示する。
+  const REFERENCE_STAGE_HEIGHT = 1080;
+  function scaledFontSizePx(fontSize) {
+    const scale = (canvasEl().clientHeight || REFERENCE_STAGE_HEIGHT) / REFERENCE_STAGE_HEIGHT;
+    return (Number(fontSize) || 16) * scale;
+  }
   const ROLE_OPTIONS = [
     { value: "onair", label: "オンエア中" },
     { value: "master", label: "Master" },
@@ -664,7 +673,7 @@
     box.style.transform = cfg.rotation ? "rotate(" + cfg.rotation + "deg)" : "";
     if (cfg.type === "text") {
       box.style.fontFamily = cfg.fontFamily || "sans-serif";
-      box.style.fontSize = (cfg.fontSize || 16) + "px";
+      box.style.fontSize = scaledFontSizePx(cfg.fontSize) + "px";
       box.style.color = cfg.color || "#ffffff";
     } else if (cfg.type === "waveform") {
       const waveCanvas = box.querySelector("canvas");
@@ -757,6 +766,7 @@
   function renderPanels() {
     const container = document.getElementById("panels");
     container.innerHTML = "";
+    let draggedPanelId = null;
     layout.elements.forEach((cfg) => {
       const panel = document.createElement("div");
       panel.className = "element-panel";
@@ -770,10 +780,8 @@
       ).join("");
       panel.innerHTML = `
         <div class="panel-head">
-          <strong>${panelTitle}</strong>
+          <span class="drag-handle" draggable="true" title="ドラッグして重なり順を変更">⠿ <strong>${panelTitle}</strong></span>
           <div class="panel-head-buttons">
-            <button class="layer-button" type="button" data-action="layer-back" title="背面へ">▼ 背面</button>
-            <button class="layer-button" type="button" data-action="layer-front" title="前面へ">▲ 前面</button>
             <button class="delete-button" type="button" data-action="delete">削除</button>
           </div>
         </div>
@@ -787,7 +795,7 @@
           </div>
           <label>フォント</label>
           <select data-field="fontFamily">${fontOptionsHtml(cfg.fontFamily)}</select>
-          <label>文字サイズ(px)</label>
+          <label>文字サイズ(px、1920x1080基準)</label>
           <input type="number" data-field="fontSize" min="8" max="120" value="${cfg.fontSize || 16}">
           <label>文字色</label>
           <input type="color" data-field="color" value="${cfg.color || "#ffffff"}">
@@ -832,28 +840,43 @@
         });
       });
 
-      const layerBackButton = panel.querySelector('[data-action="layer-back"]');
-      if (layerBackButton) {
-        layerBackButton.addEventListener("click", () => {
-          const i = layout.elements.indexOf(cfg);
-          if (i <= 0) return;
-          pushUndo();
-          [layout.elements[i - 1], layout.elements[i]] = [layout.elements[i], layout.elements[i - 1]];
-          renderAll();
-          selectElement(cfg.id);
-        });
-      }
-      const layerFrontButton = panel.querySelector('[data-action="layer-front"]');
-      if (layerFrontButton) {
-        layerFrontButton.addEventListener("click", () => {
-          const i = layout.elements.indexOf(cfg);
-          if (i < 0 || i >= layout.elements.length - 1) return;
-          pushUndo();
-          [layout.elements[i], layout.elements[i + 1]] = [layout.elements[i + 1], layout.elements[i]];
-          renderAll();
-          selectElement(cfg.id);
-        });
-      }
+      const dragHandle = panel.querySelector(".drag-handle");
+      dragHandle.addEventListener("dragstart", (e) => {
+        draggedPanelId = cfg.id;
+        e.dataTransfer.effectAllowed = "move";
+        // FirefoxはsetDataを呼ばないとドラッグ自体が始まらないことがある。
+        e.dataTransfer.setData("text/plain", cfg.id);
+        panel.classList.add("dragging");
+      });
+      dragHandle.addEventListener("dragend", () => {
+        draggedPanelId = null;
+        panel.classList.remove("dragging");
+        container.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+      });
+      panel.addEventListener("dragover", (e) => {
+        if (!draggedPanelId || draggedPanelId === cfg.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        panel.classList.add("drag-over");
+      });
+      panel.addEventListener("dragleave", () => {
+        panel.classList.remove("drag-over");
+      });
+      panel.addEventListener("drop", (e) => {
+        e.preventDefault();
+        panel.classList.remove("drag-over");
+        if (!draggedPanelId || draggedPanelId === cfg.id) return;
+        const fromIndex = layout.elements.findIndex((el) => el.id === draggedPanelId);
+        const toIndex = layout.elements.findIndex((el) => el.id === cfg.id);
+        if (fromIndex < 0 || toIndex < 0) return;
+        pushUndo();
+        const [moved] = layout.elements.splice(fromIndex, 1);
+        layout.elements.splice(toIndex, 0, moved);
+        const movedId = draggedPanelId;
+        draggedPanelId = null;
+        renderAll();
+        selectElement(movedId);
+      });
 
       const insertButton = panel.querySelector('[data-action="insert-var"]');
       if (insertButton) {

@@ -80,6 +80,16 @@
   let layout = { elements: [] };
   let transitionMs = 450;
   let holdMs = 0;
+  // フォントサイズは「1920x1080のステージを基準にした値」として扱い、実際のステージの
+  // 高さ(OBS Browser Sourceの解像度次第で960x540のエディタとは異なる)に応じて比例縮尺する。
+  // こうしないと、エディタのプレビュー(固定960x540)と実際のOverlay(任意の解像度)とで
+  // 同じfontSize値でも見た目の大きさ(フレームに対する比率)がズレてしまう。
+  const REFERENCE_STAGE_HEIGHT = 1080;
+  function scaledFontSizePx(fontSize) {
+    const stage = document.getElementById("stage");
+    const scale = (stage.clientHeight || REFERENCE_STAGE_HEIGHT) / REFERENCE_STAGE_HEIGHT;
+    return (Number(fontSize) || 16) * scale;
+  }
   const lastArtVersion = {};
   // 要素ごとの表示状態(現在表示中か、直近で描画した内容は何か)。切り替わり時の
   // フェードアウト→内容差し替え→フェードインの制御に使う。
@@ -142,7 +152,7 @@
       el.style.setProperty("--rot", (Number(cfg.rotation) || 0) + "deg");
       if (cfg.type === "text") {
         el.style.fontFamily = cfg.fontFamily || "sans-serif";
-        el.style.fontSize = (cfg.fontSize || 16) + "px";
+        el.style.fontSize = scaledFontSizePx(cfg.fontSize) + "px";
         el.style.color = cfg.color || "#ffffff";
       }
       stage.appendChild(el);
@@ -369,6 +379,11 @@
         // 待っている間に別の曲へ変わっていたら、この古い結果は反映しない(次tickの
         // fetchWaveformIfNeededが新しいdesiredKeyで再取得する)。
         if (state.committedKey !== desiredKey) return;
+        // このsegmentsに対応するdurationMsをこの時点のvarsから固定して持たせる。
+        // vars側のdurationMsはtickごとに最新の(=次の曲の)値に更新され得るため、
+        // 描画時に混ぜて使うとフレーム数とdurationMsの対応がズレて表示が崩れる
+        // (曲が切り替わった直後、波形取得が完了するまでの間に特に起こりやすい)。
+        data.durationMs = Number(vars[cfg.variable + "-duration-ms"]) || 0;
         waveformData[cfg.id] = data;
         state.contentKey = desiredKey;
         state.pendingKey = null;
@@ -524,7 +539,9 @@
       if (!el || !data || !posInfo || !el.classList.contains("visible")) return;
       let estimatedMs = posInfo.positionMs;
       if (posInfo.playing) estimatedMs += now - posInfo.receivedAt;
-      drawWaveformCanvas(el, data, estimatedMs, posInfo.durationMs, Number(cfg.windowSeconds) || 0, cfg.showGrid === true);
+      // durationMsは(posInfoではなく)dataに固定した値を使う。今表示しているsegmentsが
+      // 実際にどの曲のものかと対応させるため(曲切り替え直後の取得待ちの間は特に重要)。
+      drawWaveformCanvas(el, data, estimatedMs, data.durationMs || 0, Number(cfg.windowSeconds) || 0, cfg.showGrid === true);
     });
     requestAnimationFrame(waveformAnimationLoop);
   }
@@ -543,6 +560,17 @@
     ws.onclose = () => setTimeout(connect, 1000);
     ws.onerror = () => ws.close();
   }
+
+  /** OBS Browser Sourceのサイズが変わった場合等に、フォントサイズの縮尺だけ再計算する
+   *  (buildStageの再実行は表示状態をリセットしてしまうため避ける)。 */
+  function rescaleFontSizes() {
+    (layout.elements || []).forEach((cfg) => {
+      if (cfg.type !== "text") return;
+      const el = document.getElementById(cfg.id);
+      if (el) el.style.fontSize = scaledFontSizePx(cfg.fontSize) + "px";
+    });
+  }
+  window.addEventListener("resize", rescaleFontSizes);
 
   Promise.all([loadFonts(), loadLayout()]).then(() => {
     connect();
