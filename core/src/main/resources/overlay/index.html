@@ -17,14 +17,16 @@
   #stage {
     position: fixed;
     inset: 0;
+    --t-dur: 450ms;
   }
   .element {
     position: absolute;
-    display: none;
     box-sizing: border-box;
     margin: 0;
+    opacity: 0;
+    pointer-events: none;
   }
-  .element.visible { display: block; }
+  .element.visible { opacity: 1; }
   .element.image-element {
     width: 100%;
     height: 100%;
@@ -38,6 +40,30 @@
     text-overflow: ellipsis;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
   }
+
+  /* 切り替えエフェクトのパターン。#stageに付くクラスで一括切り替え、
+     速さはCSS変数--t-dur(JS側でlayout.transitionMsから設定)で調整する。 */
+  #stage.transition-fade .element {
+    transition: opacity var(--t-dur) ease;
+  }
+  #stage.transition-slide-up .element {
+    transition: opacity var(--t-dur) ease, transform var(--t-dur) ease;
+    transform: translateY(6%);
+  }
+  #stage.transition-slide-up .element.visible { transform: translateY(0); }
+  #stage.transition-slide-left .element {
+    transition: opacity var(--t-dur) ease, transform var(--t-dur) ease;
+    transform: translateX(-4%);
+  }
+  #stage.transition-slide-left .element.visible { transform: translateX(0); }
+  #stage.transition-zoom .element {
+    transition: opacity var(--t-dur) ease, transform var(--t-dur) ease;
+    transform: scale(0.85);
+  }
+  #stage.transition-zoom .element.visible { transform: scale(1); }
+  #stage.transition-none .element {
+    transition: none;
+  }
 </style>
 </head>
 <body>
@@ -46,7 +72,11 @@
 <script>
 (function () {
   let layout = { elements: [] };
+  let transitionMs = 450;
   const lastArtVersion = {};
+  // 要素ごとの表示状態(現在表示中か、直近で描画した内容は何か)。切り替わり時の
+  // フェードアウト→内容差し替え→フェードインの制御に使う。
+  const elementState = {};
 
   function loadFonts() {
     return fetch("/fonts")
@@ -72,6 +102,14 @@
   function buildStage() {
     const stage = document.getElementById("stage");
     stage.innerHTML = "";
+
+    // "none"は即時切り替え(アニメーションなし)、それ以外はlayout.transitionMsの速さで再生する。
+    const pattern = layout.transition || "fade";
+    const durationMs = Number(layout.transitionMs) > 0 ? Number(layout.transitionMs) : 450;
+    transitionMs = pattern === "none" ? 0 : durationMs;
+    stage.className = "transition-" + pattern;
+    stage.style.setProperty("--t-dur", transitionMs + "ms");
+
     (layout.elements || []).forEach((cfg) => {
       const el = document.createElement(cfg.type === "image" ? "img" : "div");
       el.id = cfg.id;
@@ -86,6 +124,7 @@
         el.style.color = cfg.color || "#ffffff";
       }
       stage.appendChild(el);
+      elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null };
     });
   }
 
@@ -100,39 +139,101 @@
     (layout.elements || []).forEach((cfg) => {
       const el = document.getElementById(cfg.id);
       if (!el) return;
-
-      if (cfg.type === "image") {
-        const hasArt = vars[cfg.variable + "-has-art"] === "true";
-        if (!hasArt || cfg.visible === false) {
-          el.classList.remove("visible");
-          el.removeAttribute("src");
-          lastArtVersion[cfg.id] = null;
-          return;
-        }
-        const playerNumber = vars[cfg.variable + "-player-number"];
-        const version = vars[cfg.variable + "-art-version"];
-        if (lastArtVersion[cfg.id] !== version) {
-          // 読み込みが終わるまでは表示しない(壊れた画像アイコンを一切出さないため)。
-          // 成功した時だけlastArtVersionを確定し、失敗時はnullに戻して次tickで再試行する
-          // (曲変化直後はジャケットがまだ届いていないことがあるため。波形と同じ理由)。
-          el.classList.remove("visible");
-          el.onload = () => {
-            lastArtVersion[cfg.id] = version;
-            el.classList.add("visible");
-          };
-          el.onerror = () => {
-            lastArtVersion[cfg.id] = null;
-            el.classList.remove("visible");
-          };
-          el.src = "/art/deck/" + playerNumber + "?v=" + version;
-        }
-        return;
-      }
-
-      const text = applyTemplate(cfg.template || "", vars);
-      el.textContent = text;
-      el.classList.toggle("visible", cfg.visible !== false && text.trim().length > 0);
+      if (cfg.type === "image") updateImageElement(cfg, el, vars);
+      else updateTextElement(cfg, el, vars);
     });
+  }
+
+  /**
+   * テキスト要素を更新する。表示⇔非表示、および表示したまま内容だけ変わる場合(曲の
+   * 切り替わり等)のどちらも、選択中の切り替えエフェクトでフェードアウト→内容差し替え→
+   * フェードインさせる(transitionMs=0の"none"の場合は即座に差し替える)。
+   */
+  function updateTextElement(cfg, el, vars) {
+    const state = elementState[cfg.id] || (elementState[cfg.id] = { shown: false, contentKey: null });
+    const text = applyTemplate(cfg.template || "", vars);
+    const shouldShow = cfg.visible !== false && text.trim().length > 0;
+
+    if (!shouldShow) {
+      if (state.shown) {
+        el.classList.remove("visible");
+        state.shown = false;
+        state.contentKey = null;
+      }
+      return;
+    }
+
+    if (!state.shown) {
+      el.textContent = text;
+      state.contentKey = text;
+      state.shown = true;
+      requestAnimationFrame(() => el.classList.add("visible"));
+      return;
+    }
+
+    if (state.contentKey === text) return;
+    state.contentKey = text;
+    if (transitionMs <= 0) {
+      el.textContent = text;
+      return;
+    }
+    el.classList.remove("visible");
+    setTimeout(() => {
+      // 待っている間にさらに内容が変わっていたら、この古い更新は反映しない。
+      if (state.contentKey !== text) return;
+      el.textContent = text;
+      el.classList.add("visible");
+    }, transitionMs);
+  }
+
+  /**
+   * ジャケット画像要素を更新する。読み込みが終わるまでは表示しない(壊れた画像アイコンを
+   * 一切出さないため)。成功時だけ表示・バージョン確定し、失敗時は次tickで再試行する。
+   * 既に表示中の状態で別の曲(=別バージョン)に変わった場合は、フェードアウトしてから
+   * 新しい画像を読み込み、読み込めたらフェードインする。
+   */
+  function updateImageElement(cfg, el, vars) {
+    const state = elementState[cfg.id] || (elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null });
+    const hasArt = vars[cfg.variable + "-has-art"] === "true";
+
+    if (!hasArt || cfg.visible === false) {
+      if (state.shown) {
+        el.classList.remove("visible");
+        state.shown = false;
+      }
+      el.removeAttribute("src");
+      state.contentKey = null;
+      state.pendingKey = null;
+      lastArtVersion[cfg.id] = null;
+      return;
+    }
+
+    const playerNumber = vars[cfg.variable + "-player-number"];
+    const version = vars[cfg.variable + "-art-version"];
+    if (lastArtVersion[cfg.id] === version || state.pendingKey === version) return;
+    state.pendingKey = version;
+
+    const load = () => {
+      el.onload = () => {
+        lastArtVersion[cfg.id] = version;
+        state.contentKey = version;
+        state.pendingKey = null;
+        state.shown = true;
+        requestAnimationFrame(() => el.classList.add("visible"));
+      };
+      el.onerror = () => {
+        lastArtVersion[cfg.id] = null;
+        state.pendingKey = null;
+      };
+      el.src = "/art/deck/" + playerNumber + "?v=" + version;
+    };
+
+    if (state.shown && transitionMs > 0) {
+      el.classList.remove("visible");
+      setTimeout(load, transitionMs);
+    } else {
+      load();
+    }
   }
 
   function connect() {

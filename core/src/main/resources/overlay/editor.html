@@ -136,7 +136,7 @@
   }
   .element-panel .visible-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
   .element-panel .visible-row label { margin: 0; }
-  #fontUpload {
+  #fontUpload, #transitionSettings {
     background: #1f2229;
     border-radius: 8px;
     padding: 10px 12px;
@@ -146,6 +146,23 @@
     width: 100%;
     box-sizing: border-box;
     margin-top: 6px;
+  }
+  #transitionSettings label {
+    display: block;
+    font-size: 11px;
+    color: #999;
+    margin-top: 8px;
+  }
+  #transitionSettings select {
+    width: 100%;
+    box-sizing: border-box;
+    background: #14161a;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px 6px;
+    margin-top: 2px;
+    font-family: inherit;
   }
   #saveButton {
     width: 100%;
@@ -186,6 +203,23 @@
       </div>
     </div>
     <div id="sidebar">
+      <div id="transitionSettings">
+        <h2 style="margin-top:0;">切り替えエフェクト</h2>
+        <label>パターン</label>
+        <select id="transitionPattern">
+          <option value="none">なし(即時切り替え)</option>
+          <option value="fade">フェード</option>
+          <option value="slide-up">下からスライド</option>
+          <option value="slide-left">左からスライド</option>
+          <option value="zoom">ズーム</option>
+        </select>
+        <label>速さ</label>
+        <select id="transitionSpeed">
+          <option value="250">速い</option>
+          <option value="450">普通</option>
+          <option value="800">ゆっくり</option>
+        </select>
+      </div>
       <h2>要素</h2>
       <div class="add-row">
         <button id="addTextButton" type="button">+ テキストを追加</button>
@@ -321,6 +355,20 @@
       .catch((e) => console.error("failed to load layout", e));
   }
 
+  function syncTransitionControls() {
+    document.getElementById("transitionPattern").value = layout.transition || "fade";
+    document.getElementById("transitionSpeed").value = String(layout.transitionMs || 450);
+  }
+
+  document.getElementById("transitionPattern").addEventListener("change", (e) => {
+    pushUndo();
+    layout.transition = e.target.value;
+  });
+  document.getElementById("transitionSpeed").addEventListener("change", (e) => {
+    pushUndo();
+    layout.transitionMs = Number(e.target.value);
+  });
+
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
   function roleOptionsHtml(selected) {
@@ -333,6 +381,7 @@
   }
 
   function renderAll() {
+    syncTransitionControls();
     renderBoxes();
     renderPanels();
   }
