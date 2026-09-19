@@ -70,6 +70,24 @@
   #stage.transition-none .element {
     transition: none;
   }
+  /* ?debugパラメータ付きアクセス時だけJSから表示されるテスト用パネル(OBSの通常URLでは
+     この要素自体が作られないため配信画面には一切影響しない)。 */
+  #debugPanel {
+    position: fixed;
+    left: 12px;
+    bottom: 12px;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    font-size: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+  }
+  #debugPanel input[type="range"] { width: 220px; }
 </style>
 </head>
 <body>
@@ -100,6 +118,40 @@
   const waveformElements = [];
   const waveformData = {};
   const lastPositionInfo = {};
+
+  // ?debugパラメータ付きでアクセスした時だけ、実際の(現在読み込まれている曲の)波形を
+  // 任意の再生位置でテスト表示できるパネルを出す。実機のCDJを遠隔シークすることは
+  // Pro DJ Linkの仕様上できないため、あくまで見た目確認用(実際の再生位置には影響しない)。
+  // 通常のOBS用URL(?debugなし)ではこのパネル自体が作られないため配信画面に影響しない。
+  const debugMode = new URLSearchParams(location.search).has("debug");
+  let debugOverrideRatio = null; // null = 通常のライブ位置を使う。0〜1ならその位置に固定する。
+
+  function setupDebugPanel() {
+    if (!debugMode) return;
+    const panel = document.createElement("div");
+    panel.id = "debugPanel";
+    panel.innerHTML = `
+      <label><input type="checkbox" id="debugEnable"> テスト位置を使う</label>
+      <input type="range" id="debugPosition" min="0" max="1000" value="300" disabled>
+      <span id="debugPositionLabel">30%</span>
+    `;
+    document.body.appendChild(panel);
+
+    const enableCheckbox = document.getElementById("debugEnable");
+    const slider = document.getElementById("debugPosition");
+    const label = document.getElementById("debugPositionLabel");
+
+    function updateRatioFromSlider() {
+      const ratio = Number(slider.value) / 1000;
+      label.textContent = Math.round(ratio * 100) + "%";
+      debugOverrideRatio = enableCheckbox.checked ? ratio : null;
+    }
+    enableCheckbox.addEventListener("change", () => {
+      slider.disabled = !enableCheckbox.checked;
+      updateRatioFromSlider();
+    });
+    slider.addEventListener("input", updateRatioFromSlider);
+  }
 
   function loadFonts() {
     return fetch("/fonts")
@@ -537,11 +589,19 @@
       const data = waveformData[cfg.id];
       const posInfo = lastPositionInfo[cfg.id];
       if (!el || !data || !posInfo || !el.classList.contains("visible")) return;
-      let estimatedMs = posInfo.positionMs;
-      if (posInfo.playing) estimatedMs += now - posInfo.receivedAt;
+      const durationMs = data.durationMs || 0;
+      let estimatedMs;
+      if (debugOverrideRatio !== null) {
+        // テストパネルで位置を固定している間はライブの再生位置を無視し、指定した
+        // 割合(0〜1)をこの曲のdurationMsに当てはめた位置を中心に表示する。
+        estimatedMs = debugOverrideRatio * durationMs;
+      } else {
+        estimatedMs = posInfo.positionMs;
+        if (posInfo.playing) estimatedMs += now - posInfo.receivedAt;
+      }
       // durationMsは(posInfoではなく)dataに固定した値を使う。今表示しているsegmentsが
       // 実際にどの曲のものかと対応させるため(曲切り替え直後の取得待ちの間は特に重要)。
-      drawWaveformCanvas(el, data, estimatedMs, data.durationMs || 0, Number(cfg.windowSeconds) || 0, cfg.showGrid === true);
+      drawWaveformCanvas(el, data, estimatedMs, durationMs, Number(cfg.windowSeconds) || 0, cfg.showGrid === true);
     });
     requestAnimationFrame(waveformAnimationLoop);
   }
@@ -571,6 +631,8 @@
     });
   }
   window.addEventListener("resize", rescaleFontSizes);
+
+  setupDebugPanel();
 
   Promise.all([loadFonts(), loadLayout()]).then(() => {
     connect();
