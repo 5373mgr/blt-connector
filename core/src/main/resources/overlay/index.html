@@ -7,142 +7,140 @@
   html, body {
     margin: 0;
     padding: 0;
+    width: 100%;
+    height: 100%;
     background: transparent; /* OBS Browser Sourceで透過させる */
+    overflow: hidden;
     font-family: "Segoe UI", "Hiragino Sans", sans-serif;
     color: #fff;
   }
-  #decks {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px;
+  #stage {
+    position: fixed;
+    inset: 0;
   }
-  .deck {
+  .element {
+    position: absolute;
     display: none;
-    align-items: center;
-    gap: 12px;
-    background: rgba(0, 0, 0, 0.55);
-    border-radius: 10px;
-    padding: 10px 14px;
-    max-width: 480px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    box-sizing: border-box;
+    margin: 0;
   }
-  .deck.active { display: flex; }
-  .deck.master { outline: 2px solid #ffd23f; }
-  .art {
-    width: 64px;
-    height: 64px;
-    border-radius: 6px;
-    object-fit: cover;
-    background: #222;
-    flex-shrink: 0;
-  }
-  .info { min-width: 0; flex: 1; }
-  .title {
-    font-size: 16px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .artist, .album {
-    font-size: 12px;
-    color: #ccc;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-  .bpm { font-size: 12px; color: #9fe870; }
-  .master-badge {
-    display: none;
-    font-size: 10px;
-    font-weight: 700;
-    color: #1a1a1a;
-    background: #ffd23f;
-    border-radius: 4px;
-    padding: 1px 6px;
-  }
-  .deck.master .master-badge { display: inline-block; }
-  .progress {
-    height: 3px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 2px;
-    margin-top: 6px;
-    overflow: hidden;
-  }
-  .progress-bar {
+  .element.visible { display: block; }
+  .element.image-element {
+    width: 100%;
     height: 100%;
-    background: #9fe870;
-    width: 0%;
+    object-fit: cover;
+    border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  }
+  .element.text-element {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
   }
 </style>
 </head>
 <body>
-  <div id="decks">
-    <div class="deck" id="deck-1">
-      <img class="art" id="art-1">
-      <div class="info">
-        <div class="title" id="title-1"></div>
-        <div class="artist" id="artist-1"></div>
-        <div class="album" id="album-1"></div>
-        <div class="meta">
-          <span class="bpm" id="bpm-1"></span>
-          <span class="master-badge">MASTER</span>
-        </div>
-        <div class="progress"><div class="progress-bar" id="progress-1"></div></div>
-      </div>
-    </div>
-    <div class="deck" id="deck-2">
-      <img class="art" id="art-2">
-      <div class="info">
-        <div class="title" id="title-2"></div>
-        <div class="artist" id="artist-2"></div>
-        <div class="album" id="album-2"></div>
-        <div class="meta">
-          <span class="bpm" id="bpm-2"></span>
-          <span class="master-badge">MASTER</span>
-        </div>
-        <div class="progress"><div class="progress-bar" id="progress-2"></div></div>
-      </div>
-    </div>
-    <div class="deck" id="deck-3">
-      <img class="art" id="art-3">
-      <div class="info">
-        <div class="title" id="title-3"></div>
-        <div class="artist" id="artist-3"></div>
-        <div class="album" id="album-3"></div>
-        <div class="meta">
-          <span class="bpm" id="bpm-3"></span>
-          <span class="master-badge">MASTER</span>
-        </div>
-        <div class="progress"><div class="progress-bar" id="progress-3"></div></div>
-      </div>
-    </div>
-    <div class="deck" id="deck-4">
-      <img class="art" id="art-4">
-      <div class="info">
-        <div class="title" id="title-4"></div>
-        <div class="artist" id="artist-4"></div>
-        <div class="album" id="album-4"></div>
-        <div class="meta">
-          <span class="bpm" id="bpm-4"></span>
-          <span class="master-badge">MASTER</span>
-        </div>
-        <div class="progress"><div class="progress-bar" id="progress-4"></div></div>
-      </div>
-    </div>
-  </div>
+  <div id="stage"></div>
 
 <script>
 (function () {
+  let layout = { elements: [] };
   const lastArtVersion = {};
+
+  function loadFonts() {
+    return fetch("/fonts")
+      .then((res) => res.json())
+      .then((fonts) => {
+        if (!fonts.length) return;
+        const style = document.createElement("style");
+        style.textContent = fonts
+          .map((f) => `@font-face { font-family: "${f.name}"; src: url("/fonts/${f.file}"); }`)
+          .join("\n");
+        document.head.appendChild(style);
+      })
+      .catch((e) => console.error("failed to load fonts", e));
+  }
+
+  function loadLayout() {
+    return fetch("/layout")
+      .then((res) => res.json())
+      .then((data) => { layout = data; buildStage(); })
+      .catch((e) => console.error("failed to load layout", e));
+  }
+
+  function buildStage() {
+    const stage = document.getElementById("stage");
+    stage.innerHTML = "";
+    (layout.elements || []).forEach((cfg) => {
+      const el = document.createElement(cfg.type === "image" ? "img" : "div");
+      el.id = cfg.id;
+      el.className = "element " + (cfg.type === "image" ? "image-element" : "text-element");
+      el.style.left = cfg.x + "%";
+      el.style.top = cfg.y + "%";
+      el.style.width = cfg.width + "%";
+      el.style.height = cfg.height + "%";
+      if (cfg.type === "text") {
+        el.style.fontFamily = cfg.fontFamily || "sans-serif";
+        el.style.fontSize = (cfg.fontSize || 16) + "px";
+        el.style.color = cfg.color || "#ffffff";
+      }
+      stage.appendChild(el);
+    });
+  }
+
+  /** テンプレート文字列中の `{変数名}` を vars の値で置換する。無い変数は空文字になる。 */
+  function applyTemplate(template, vars) {
+    return template.replace(/\{([a-zA-Z0-9-]+)\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : ""
+    );
+  }
+
+  function applyVars(vars) {
+    (layout.elements || []).forEach((cfg) => {
+      const el = document.getElementById(cfg.id);
+      if (!el) return;
+
+      if (cfg.type === "image") {
+        const hasArt = vars[cfg.variable + "-has-art"] === "true";
+        if (!hasArt || cfg.visible === false) {
+          el.classList.remove("visible");
+          el.removeAttribute("src");
+          lastArtVersion[cfg.id] = null;
+          return;
+        }
+        const playerNumber = vars[cfg.variable + "-player-number"];
+        const version = vars[cfg.variable + "-art-version"];
+        if (lastArtVersion[cfg.id] !== version) {
+          // 読み込みが終わるまでは表示しない(壊れた画像アイコンを一切出さないため)。
+          // 成功した時だけlastArtVersionを確定し、失敗時はnullに戻して次tickで再試行する
+          // (曲変化直後はジャケットがまだ届いていないことがあるため。波形と同じ理由)。
+          el.classList.remove("visible");
+          el.onload = () => {
+            lastArtVersion[cfg.id] = version;
+            el.classList.add("visible");
+          };
+          el.onerror = () => {
+            lastArtVersion[cfg.id] = null;
+            el.classList.remove("visible");
+          };
+          el.src = "/art/deck/" + playerNumber + "?v=" + version;
+        }
+        return;
+      }
+
+      const text = applyTemplate(cfg.template || "", vars);
+      el.textContent = text;
+      el.classList.toggle("visible", cfg.visible !== false && text.trim().length > 0);
+    });
+  }
 
   function connect() {
     const ws = new WebSocket("ws://" + location.host + "/ws");
     ws.onmessage = (event) => {
       try {
-        applyUpdate(JSON.parse(event.data));
+        const data = JSON.parse(event.data);
+        applyVars(data.vars || {});
       } catch (e) {
         console.error("failed to parse overlay update", e);
       }
@@ -151,36 +149,9 @@
     ws.onerror = () => ws.close();
   }
 
-  function applyUpdate(deck) {
-    const n = deck.playerNumber;
-    const root = document.getElementById("deck-" + n);
-    if (!root) return;
-
-    const hasTrack = deck.title && deck.title.length > 0;
-    root.classList.toggle("active", hasTrack);
-    root.classList.toggle("master", !!deck.master);
-    if (!hasTrack) return;
-
-    document.getElementById("title-" + n).textContent = deck.title || "";
-    document.getElementById("artist-" + n).textContent = deck.artist || "";
-    document.getElementById("album-" + n).textContent = deck.album || "";
-    document.getElementById("bpm-" + n).textContent = deck.bpm ? deck.bpm.toFixed(1) + " BPM" : "";
-
-    if (deck.durationMs > 0 && deck.positionMs >= 0) {
-      const pct = Math.min(100, (deck.positionMs / deck.durationMs) * 100);
-      document.getElementById("progress-" + n).style.width = pct + "%";
-    }
-
-    const artEl = document.getElementById("art-" + n);
-    if (deck.hasArt && lastArtVersion[n] !== deck.trackVersion) {
-      lastArtVersion[n] = deck.trackVersion;
-      artEl.src = "/art/deck/" + n + "?v=" + deck.trackVersion;
-    } else if (!deck.hasArt) {
-      artEl.removeAttribute("src");
-    }
-  }
-
-  connect();
+  Promise.all([loadFonts(), loadLayout()]).then(() => {
+    connect();
+  });
 })();
 </script>
 </body>

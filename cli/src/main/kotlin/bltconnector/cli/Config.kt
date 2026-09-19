@@ -16,6 +16,8 @@ data class Config(
     val outputInterface: String? = null,
     val overlayPort: Int = 8090,
     val webGuiPort: Int = 8081,
+    /** CarabinerBridge(Ableton Link)がCarabinerバイナリと通信するローカルポート。 */
+    val carabinerPort: Int = 17000,
     val destinations: List<DestinationConfig> = emptyList(),
 ) {
     fun toJson(): String {
@@ -23,6 +25,7 @@ data class Config(
             put("outputInterface", outputInterface ?: JSONObject.NULL)
             put("overlayPort", overlayPort)
             put("webGuiPort", webGuiPort)
+            put("carabinerPort", carabinerPort)
             put("destinations", JSONArray(destinations.map {
                 JSONObject().apply {
                     put("name", it.name)
@@ -44,6 +47,7 @@ data class Config(
                     outputInterface = json.optString("outputInterface", null).takeUnless { it.isNullOrBlank() },
                     overlayPort = json.optInt("overlayPort", 8090),
                     webGuiPort = json.optInt("webGuiPort", 8081),
+                    carabinerPort = json.optInt("carabinerPort", 17000),
                     destinations = json.optJSONArray("destinations")?.let { arr ->
                         (0 until arr.length()).map { i ->
                             val d = arr.getJSONObject(i)

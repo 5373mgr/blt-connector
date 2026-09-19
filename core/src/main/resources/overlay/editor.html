@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>BLT Connector - Overlayレイアウトエディタ</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #14161a;
+    color: #eee;
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+  }
+  #app {
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+    align-items: flex-start;
+  }
+  #canvasWrap { flex-shrink: 0; }
+  #canvas {
+    position: relative;
+    width: 960px;
+    height: 540px;
+    background: repeating-conic-gradient(#2a2d35 0% 25%, #1f2229 0% 50%) 0 0 / 40px 40px;
+    border: 1px solid #444;
+    overflow: hidden;
+    user-select: none;
+  }
+  .box {
+    position: absolute;
+    box-sizing: border-box;
+    border: 2px dashed rgba(159, 232, 112, 0.7);
+    cursor: move;
+    overflow: hidden;
+  }
+  .box.selected { border-color: #ffd23f; }
+  .box .label {
+    position: absolute;
+    top: -20px;
+    left: 0;
+    font-size: 11px;
+    color: #9fe870;
+    white-space: nowrap;
+  }
+  .box.selected .label { color: #ffd23f; }
+  .box .resize-handle {
+    position: absolute;
+    right: -6px;
+    bottom: -6px;
+    width: 12px;
+    height: 12px;
+    background: #ffd23f;
+    border-radius: 2px;
+    cursor: se-resize;
+  }
+  .box.image-box {
+    background: #444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #999;
+    font-size: 11px;
+  }
+  .box.text-box {
+    display: flex;
+    align-items: center;
+    color: #fff;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #sidebar { width: 360px; }
+  #sidebar h2 { font-size: 14px; margin: 0 0 8px; }
+  .add-row { display: flex; gap: 8px; margin-bottom: 12px; }
+  .add-row button {
+    flex: 1;
+    padding: 8px;
+    background: #2a2d35;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .element-panel {
+    background: #1f2229;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .element-panel.active { outline: 1px solid #ffd23f; }
+  .element-panel .panel-head { display: flex; justify-content: space-between; align-items: center; }
+  .element-panel .delete-button {
+    background: none;
+    border: 1px solid #663333;
+    color: #ff8888;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .element-panel label {
+    display: block;
+    font-size: 11px;
+    color: #999;
+    margin-top: 8px;
+  }
+  .element-panel input[type=number],
+  .element-panel input[type=text],
+  .element-panel textarea,
+  .element-panel select {
+    width: 100%;
+    box-sizing: border-box;
+    background: #14161a;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 4px 6px;
+    margin-top: 2px;
+    font-family: inherit;
+  }
+  .element-panel textarea { resize: vertical; min-height: 40px; }
+  .element-panel input[type=color] { width: 100%; margin-top: 2px; }
+  .var-insert-row { display: flex; gap: 4px; margin-top: 6px; }
+  .var-insert-row select { flex: 1; }
+  .var-insert-row button {
+    background: #2a2d35;
+    color: #eee;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .element-panel .visible-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+  .element-panel .visible-row label { margin: 0; }
+  #fontUpload {
+    background: #1f2229;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  #fontUpload input, #fontUpload button {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 6px;
+  }
+  #saveButton {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    background: #9fe870;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #status { font-size: 12px; color: #9fe870; margin-top: 8px; min-height: 1.2em; }
+  #variableReference { margin-top: 12px; width: 960px; }
+  .var-group { margin-bottom: 8px; }
+  .var-group .var-group-label { font-size: 11px; color: #999; margin-bottom: 4px; }
+  .var-chip {
+    display: inline-block;
+    font-size: 11px;
+    background: #2a2d35;
+    color: #9fe870;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin: 0 4px 4px 0;
+    cursor: pointer;
+  }
+  .var-chip:hover { border-color: #9fe870; }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div id="canvasWrap">
+      <h2 style="font-size:14px;">プレビュー(16:9、サンプル値での見た目)</h2>
+      <div id="canvas"></div>
+      <div id="variableReference">
+        <h2 style="font-size:14px;">利用可能な変数(クリックでコピー、テンプレート欄に貼り付けて使えます)</h2>
+        <div id="variableList"></div>
+      </div>
+    </div>
+    <div id="sidebar">
+      <h2>要素</h2>
+      <div class="add-row">
+        <button id="addTextButton" type="button">+ テキストを追加</button>
+        <button id="addImageButton" type="button">+ ジャケット画像を追加</button>
+      </div>
+      <div id="panels"></div>
+      <div id="fontUpload">
+        <h2 style="margin-top:0;">フォントを追加</h2>
+        <input type="text" id="fontName" placeholder="表示名(例: Noto Sans JP Bold)">
+        <input type="file" id="fontFile" accept=".ttf,.otf,.woff,.woff2">
+        <button id="uploadFontButton" type="button">アップロード</button>
+      </div>
+      <button id="saveButton" type="button">保存</button>
+      <div id="status"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const WEB_SAFE_FONTS = ["sans-serif", "serif", "monospace", "Segoe UI", "Hiragino Sans", "Meiryo"];
+  const ROLE_OPTIONS = [
+    { value: "onair", label: "オンエア中" },
+    { value: "master", label: "Master" },
+    { value: "deck1", label: "デッキ1" },
+    { value: "deck2", label: "デッキ2" },
+    { value: "deck3", label: "デッキ3" },
+    { value: "deck4", label: "デッキ4" },
+  ];
+  const FIELD_OPTIONS = [
+    { value: "track-name", label: "曲名" },
+    { value: "artist-name", label: "アーティスト名" },
+    { value: "album-name", label: "アルバム名" },
+    { value: "comment", label: "コメント" },
+  ];
+
+  // プレビュー用のダミー値(実際のデッキ状態は無いので、見た目確認用の固定サンプル)。
+  const SAMPLE_VARS = {};
+  ROLE_OPTIONS.forEach((role, i) => {
+    SAMPLE_VARS[role.value + "-track-name"] = "サンプル曲名 " + (i + 1);
+    SAMPLE_VARS[role.value + "-artist-name"] = "サンプルアーティスト";
+    SAMPLE_VARS[role.value + "-album-name"] = "サンプルアルバム";
+    SAMPLE_VARS[role.value + "-comment"] = "サンプルコメント";
+    SAMPLE_VARS[role.value + "-has-art"] = "true";
+  });
+
+  let layout = { elements: [] };
+  let fonts = [];
+  let selectedId = null;
+  let nextId = 1;
+
+  // --- Undo/Redo ---
+  let undoStack = [];
+  let redoStack = [];
+
+  function cloneLayout() { return JSON.parse(JSON.stringify(layout)); }
+
+  function pushUndo(snapshot) {
+    undoStack.push(snapshot || cloneLayout());
+    if (undoStack.length > 50) undoStack.shift();
+    redoStack = [];
+  }
+
+  function undo() {
+    if (undoStack.length === 0) {
+      showStatus("これ以上元に戻せません");
+      return;
+    }
+    redoStack.push(cloneLayout());
+    layout = undoStack.pop();
+    renderAll();
+    showStatus("元に戻しました");
+  }
+
+  function redo() {
+    if (redoStack.length === 0) {
+      showStatus("これ以上やり直せません");
+      return;
+    }
+    undoStack.push(cloneLayout());
+    layout = redoStack.pop();
+    renderAll();
+    showStatus("やり直しました");
+  }
+
+  document.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+    if (!(e.ctrlKey || e.metaKey)) return;
+    if (key === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redo(); else undo();
+    } else if (key === "y") {
+      e.preventDefault();
+      redo();
+    }
+  });
+
+  function canvasEl() { return document.getElementById("canvas"); }
+
+  function applyTemplate(template, vars) {
+    return template.replace(/\{([a-zA-Z0-9-]+)\}/g, (match, key) =>
+      Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : ""
+    );
+  }
+
+  function loadFonts() {
+    return fetch("/fonts")
+      .then((res) => res.json())
+      .then((list) => {
+        fonts = list;
+        const style = document.createElement("style");
+        style.id = "customFontFaces";
+        style.textContent = fonts
+          .map((f) => `@font-face { font-family: "${f.name}"; src: url("/fonts/${f.file}"); }`)
+          .join("\n");
+        const old = document.getElementById("customFontFaces");
+        if (old) old.remove();
+        document.head.appendChild(style);
+      })
+      .catch((e) => console.error("failed to load fonts", e));
+  }
+
+  function loadLayout() {
+    return fetch("/layout")
+      .then((res) => res.json())
+      .then((data) => {
+        layout = data && data.elements ? data : { elements: [] };
+        const maxNum = layout.elements.reduce((max, el) => {
+          const match = /(\d+)$/.exec(el.id || "");
+          return match ? Math.max(max, Number(match[1])) : max;
+        }, 0);
+        nextId = maxNum + 1;
+      })
+      .catch((e) => console.error("failed to load layout", e));
+  }
+
+  function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+  function roleOptionsHtml(selected) {
+    return ROLE_OPTIONS.map((r) => `<option value="${r.value}"${r.value === selected ? " selected" : ""}>${r.label}</option>`).join("");
+  }
+
+  function fontOptionsHtml(selected) {
+    const all = WEB_SAFE_FONTS.concat(fonts.map((f) => f.name));
+    return all.map((name) => `<option value="${name}"${name === selected ? " selected" : ""}>${name}</option>`).join("");
+  }
+
+  function renderAll() {
+    renderBoxes();
+    renderPanels();
+  }
+
+  function renderBoxes() {
+    const canvas = canvasEl();
+    canvas.innerHTML = "";
+    layout.elements.forEach((cfg) => {
+      const box = document.createElement("div");
+      box.className = "box " + (cfg.type === "image" ? "image-box" : "text-box");
+      box.id = "box-" + cfg.id;
+      box.dataset.id = cfg.id;
+
+      const label = document.createElement("div");
+      label.className = "label";
+      label.textContent = cfg.type === "image" ? "ジャケット (" + cfg.variable + ")" : "テキスト";
+      box.appendChild(label);
+
+      if (cfg.type === "text") {
+        const textSpan = document.createElement("span");
+        textSpan.textContent = applyTemplate(cfg.template || "", SAMPLE_VARS);
+        box.appendChild(textSpan);
+      } else {
+        box.appendChild(document.createTextNode("ジャケット"));
+      }
+
+      const handle = document.createElement("div");
+      handle.className = "resize-handle";
+      box.appendChild(handle);
+
+      canvas.appendChild(box);
+      applyBoxStyle(cfg.id);
+      makeDraggable(box, cfg.id);
+      makeResizable(handle, cfg.id);
+      box.addEventListener("pointerdown", () => selectElement(cfg.id));
+    });
+  }
+
+  function findElement(id) { return layout.elements.find((el) => el.id === id); }
+
+  function applyBoxStyle(id) {
+    const cfg = findElement(id);
+    const box = document.getElementById("box-" + id);
+    if (!cfg || !box) return;
+    box.style.left = cfg.x + "%";
+    box.style.top = cfg.y + "%";
+    box.style.width = cfg.width + "%";
+    box.style.height = cfg.height + "%";
+    box.style.opacity = cfg.visible === false ? "0.3" : "1";
+    if (cfg.type === "text") {
+      box.style.fontFamily = cfg.fontFamily || "sans-serif";
+      box.style.fontSize = (cfg.fontSize || 16) + "px";
+      box.style.color = cfg.color || "#ffffff";
+    }
+  }
+
+  function selectElement(id) {
+    selectedId = id;
+    layout.elements.forEach((cfg) => {
+      const box = document.getElementById("box-" + cfg.id);
+      const panel = document.getElementById("panel-" + cfg.id);
+      if (box) box.classList.toggle("selected", cfg.id === id);
+      if (panel) panel.classList.toggle("active", cfg.id === id);
+    });
+  }
+
+  function makeDraggable(box, id) {
+    let dragging = false;
+    let moved = false;
+    let preDragSnapshot = null;
+    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    box.addEventListener("pointerdown", (e) => {
+      if (e.target.classList.contains("resize-handle")) return;
+      dragging = true;
+      moved = false;
+      preDragSnapshot = cloneLayout();
+      box.setPointerCapture(e.pointerId);
+      const cfg = findElement(id);
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = cfg.x;
+      startTop = cfg.y;
+    });
+    box.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      moved = true;
+      const rect = canvasEl().getBoundingClientRect();
+      const cfg = findElement(id);
+      const dxPct = ((e.clientX - startX) / rect.width) * 100;
+      const dyPct = ((e.clientY - startY) / rect.height) * 100;
+      cfg.x = clamp(startLeft + dxPct, 0, 100 - cfg.width);
+      cfg.y = clamp(startTop + dyPct, 0, 100 - cfg.height);
+      applyBoxStyle(id);
+    });
+    box.addEventListener("pointerup", (e) => {
+      dragging = false;
+      box.releasePointerCapture(e.pointerId);
+      if (moved && preDragSnapshot) pushUndo(preDragSnapshot);
+      preDragSnapshot = null;
+    });
+  }
+
+  function makeResizable(handle, id) {
+    let resizing = false;
+    let moved = false;
+    let preResizeSnapshot = null;
+    let startX = 0, startY = 0, startWidth = 0, startHeight = 0;
+    handle.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+      resizing = true;
+      moved = false;
+      preResizeSnapshot = cloneLayout();
+      handle.setPointerCapture(e.pointerId);
+      const cfg = findElement(id);
+      startX = e.clientX;
+      startY = e.clientY;
+      startWidth = cfg.width;
+      startHeight = cfg.height;
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (!resizing) return;
+      moved = true;
+      const rect = canvasEl().getBoundingClientRect();
+      const cfg = findElement(id);
+      const dxPct = ((e.clientX - startX) / rect.width) * 100;
+      const dyPct = ((e.clientY - startY) / rect.height) * 100;
+      cfg.width = clamp(startWidth + dxPct, 3, 100 - cfg.x);
+      cfg.height = clamp(startHeight + dyPct, 3, 100 - cfg.y);
+      applyBoxStyle(id);
+    });
+    handle.addEventListener("pointerup", (e) => {
+      resizing = false;
+      handle.releasePointerCapture(e.pointerId);
+      if (moved && preResizeSnapshot) pushUndo(preResizeSnapshot);
+      preResizeSnapshot = null;
+    });
+  }
+
+  function renderPanels() {
+    const container = document.getElementById("panels");
+    container.innerHTML = "";
+    layout.elements.forEach((cfg) => {
+      const panel = document.createElement("div");
+      panel.className = "element-panel";
+      panel.id = "panel-" + cfg.id;
+      const isText = cfg.type === "text";
+      panel.innerHTML = `
+        <div class="panel-head">
+          <strong>${isText ? "テキスト" : "ジャケット画像"}</strong>
+          <button class="delete-button" type="button" data-action="delete">削除</button>
+        </div>
+        ${isText ? `
+          <label>テンプレート文字列</label>
+          <textarea data-field="template">${cfg.template || ""}</textarea>
+          <div class="var-insert-row">
+            <select data-role-select>${roleOptionsHtml("onair")}</select>
+            <select data-field-select>${FIELD_OPTIONS.map((f) => `<option value="${f.value}">${f.label}</option>`).join("")}</select>
+            <button type="button" data-action="insert-var">挿入</button>
+          </div>
+          <label>フォント</label>
+          <select data-field="fontFamily">${fontOptionsHtml(cfg.fontFamily)}</select>
+          <label>文字サイズ(px)</label>
+          <input type="number" data-field="fontSize" min="8" max="120" value="${cfg.fontSize || 16}">
+          <label>文字色</label>
+          <input type="color" data-field="color" value="${cfg.color || "#ffffff"}">
+        ` : `
+          <label>表示するデッキ/役割</label>
+          <select data-field="variable">${roleOptionsHtml(cfg.variable)}</select>
+        `}
+        <div class="visible-row">
+          <input type="checkbox" data-field="visible" id="visible-${cfg.id}" ${cfg.visible !== false ? "checked" : ""}>
+          <label for="visible-${cfg.id}">表示する</label>
+        </div>
+      `;
+
+      panel.querySelectorAll("[data-field]").forEach((input) => {
+        input.addEventListener("focus", () => pushUndo());
+        input.addEventListener("input", () => {
+          const field = input.dataset.field;
+          if (field === "visible") {
+            cfg.visible = input.checked;
+          } else if (field === "fontSize") {
+            cfg.fontSize = Number(input.value);
+          } else {
+            cfg[field] = input.value;
+          }
+          applyBoxStyle(cfg.id);
+          if (field === "template") {
+            const box = document.getElementById("box-" + cfg.id);
+            const span = box && box.querySelector("span");
+            if (span) span.textContent = applyTemplate(cfg.template || "", SAMPLE_VARS);
+          }
+        });
+      });
+
+      const insertButton = panel.querySelector('[data-action="insert-var"]');
+      if (insertButton) {
+        insertButton.addEventListener("click", () => {
+          pushUndo();
+          const role = panel.querySelector("[data-role-select]").value;
+          const field = panel.querySelector("[data-field-select]").value;
+          const textarea = panel.querySelector('[data-field="template"]');
+          const varText = `{${role}-${field}}`;
+          const start = textarea.selectionStart || 0;
+          const end = textarea.selectionEnd || 0;
+          textarea.value = textarea.value.slice(0, start) + varText + textarea.value.slice(end);
+          cfg.template = textarea.value;
+          const box = document.getElementById("box-" + cfg.id);
+          const span = box && box.querySelector("span");
+          if (span) span.textContent = applyTemplate(cfg.template, SAMPLE_VARS);
+          textarea.focus();
+        });
+      }
+
+      panel.querySelector('[data-action="delete"]').addEventListener("click", () => {
+        pushUndo();
+        layout.elements = layout.elements.filter((el) => el.id !== cfg.id);
+        renderAll();
+      });
+
+      panel.addEventListener("pointerdown", () => selectElement(cfg.id));
+      container.appendChild(panel);
+    });
+  }
+
+  function addTextElement() {
+    pushUndo();
+    layout.elements.push({
+      id: "text" + nextId++,
+      type: "text",
+      template: "",
+      x: 10, y: 10, width: 40, height: 8,
+      fontFamily: "sans-serif", fontSize: 24, color: "#ffffff",
+      visible: true,
+    });
+    renderAll();
+  }
+
+  function addImageElement() {
+    pushUndo();
+    layout.elements.push({
+      id: "art" + nextId++,
+      type: "image",
+      variable: "onair",
+      x: 5, y: 5, width: 12, height: 21,
+      visible: true,
+    });
+    renderAll();
+  }
+
+  document.getElementById("addTextButton").addEventListener("click", addTextElement);
+  document.getElementById("addImageButton").addEventListener("click", addImageElement);
+
+  function renderVariableReference() {
+    const container = document.getElementById("variableList");
+    container.innerHTML = "";
+    ROLE_OPTIONS.forEach((role) => {
+      const group = document.createElement("div");
+      group.className = "var-group";
+      const label = document.createElement("div");
+      label.className = "var-group-label";
+      label.textContent = role.label;
+      group.appendChild(label);
+      FIELD_OPTIONS.forEach((field) => {
+        const text = `{${role.value}-${field.value}}`;
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "var-chip";
+        chip.textContent = text;
+        chip.title = field.label + "(" + role.label + ")";
+        chip.addEventListener("click", () => {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(
+              () => showStatus("コピーしました: " + text),
+              () => showStatus(text),
+            );
+          } else {
+            showStatus(text);
+          }
+        });
+        group.appendChild(chip);
+      });
+      container.appendChild(group);
+    });
+  }
+
+  function showStatus(message) {
+    const el = document.getElementById("status");
+    el.textContent = message;
+    setTimeout(() => { if (el.textContent === message) el.textContent = ""; }, 3000);
+  }
+
+  document.getElementById("uploadFontButton").addEventListener("click", () => {
+    const nameInput = document.getElementById("fontName");
+    const fileInput = document.getElementById("fontFile");
+    const file = fileInput.files[0];
+    if (!file) {
+      showStatus("フォントファイルを選択してください");
+      return;
+    }
+    const name = nameInput.value.trim() || file.name;
+    const formData = new FormData();
+    formData.append("name", name);
+    formData.append("fontFile", file);
+    fetch("/fonts", { method: "POST", body: formData })
+      .then((res) => {
+        if (!res.ok) throw new Error("アップロードに失敗しました");
+        return res.json();
+      })
+      .then(() => {
+        showStatus("フォントを追加しました: " + name);
+        nameInput.value = "";
+        fileInput.value = "";
+        return loadFonts();
+      })
+      .then(() => renderPanels())
+      .catch((e) => showStatus("エラー: " + e.message));
+  });
+
+  document.getElementById("saveButton").addEventListener("click", () => {
+    fetch("/layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(layout),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("保存に失敗しました");
+        showStatus("保存しました");
+      })
+      .catch((e) => showStatus("エラー: " + e.message));
+  });
+
+  Promise.all([loadFonts(), loadLayout()]).then(() => {
+    renderAll();
+    renderVariableReference();
+  });
+})();
+</script>
+</body>
+</html>

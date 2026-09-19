@@ -10,6 +10,7 @@ import javafx.application.Platform
 import javafx.geometry.Insets
 import javafx.scene.Scene
 import javafx.scene.control.Button
+import javafx.scene.control.CheckBox
 import javafx.scene.control.Label
 import javafx.scene.control.ListView
 import javafx.scene.control.TextArea
@@ -24,6 +25,11 @@ import java.util.concurrent.TimeUnit
 /**
  * 最小限の動作確認用GUI。Receiverを起動してデッキ1〜4の状態をポーリングし、
  * 登録した宛先へSender経由でOSC配信する。宛先は手動追加のみ(mDNS自動検出は未実装)。
+ *
+ * Receiver/Overlay/CarabinerはそれぞれチェックボックスでON/OFFできる。
+ * 他端末(例: Raspberry Pi版CLI)が既にReceiverとして動いている場合、この機の
+ * Receiverだけを止めておけば「Receiverが2台になる」問題を避けつつ、Overlay等の
+ * 単体動作確認ができる。
  */
 class Main : Application() {
     private val receiver = Receiver()
@@ -32,17 +38,68 @@ class Main : Application() {
     private val carabinerBridge = CarabinerBridge(port = 17000)
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
 
+    @Volatile private var receiverRunning = false
+
     override fun start(stage: Stage) {
         val status = Label("Receiver: 停止中 / Overlay: http://localhost:8090/")
+
+        val log = TextArea().apply { isEditable = false }
+
+        val receiverCheckBox = CheckBox("Receiver").apply { isSelected = false }
+        val overlayCheckBox = CheckBox("Overlay").apply { isSelected = true }
+        val carabinerCheckBox = CheckBox("Carabiner (Ableton Link)").apply { isSelected = true }
+
         try {
             overlayServer.startServer()
         } catch (e: Exception) {
             status.text = "Overlayサーバー起動失敗: ${e.message}"
+            overlayCheckBox.isSelected = false
         }
         carabinerBridge.start()
 
-        val log = TextArea().apply { isEditable = false }
-        val startButton = Button("Receiver開始")
+        // 常時ポーリングし、Receiverが動いていなければpollDeckがnullを返すだけなので害はない
+        // (Receiverの有効/無効をこのスケジューラ自体の起動/停止と分離できる)。
+        scheduler.scheduleAtFixedRate({
+            val decks = (1..4).mapNotNull { receiver.pollDeck(it) }
+            decks.forEach {
+                sender.update(it)
+                if (overlayCheckBox.isSelected) overlayServer.update(it)
+                if (carabinerCheckBox.isSelected && it.master) carabinerBridge.updateMasterTempo(it.bpm)
+            }
+            val lines = decks.joinToString("\n") {
+                "deck ${it.playerNumber}: ${it.title ?: "-"} / ${it.artist ?: "-"} " +
+                    "(${it.positionMs ?: -1}ms, ${"%.1f".format(it.bpm)}bpm${if (it.master) ", MASTER" else ""})"
+            }
+            Platform.runLater { log.text = lines }
+        }, 0, 100, TimeUnit.MILLISECONDS)
+
+        receiverCheckBox.selectedProperty().addListener { _, _, enabled ->
+            if (enabled) {
+                if (!receiverRunning) {
+                    receiverRunning = true
+                    status.text = "Receiver: 起動中(CDJ検出待ち)"
+                    // beat-linkはCDJが見つかるまで内部で数十秒ブロックし得るため、JavaFXスレッドを
+                    // フリーズさせないよう別スレッドで起動する
+                    Thread({ receiver.start() }, "Receiver Startup").apply { isDaemon = true }.start()
+                }
+            } else {
+                receiverRunning = false
+                status.text = "Receiver: 停止中"
+                receiver.stop()
+            }
+        }
+
+        overlayCheckBox.selectedProperty().addListener { _, _, enabled ->
+            try {
+                if (enabled) overlayServer.startServer() else overlayServer.stopServer()
+            } catch (e: Exception) {
+                status.text = "Overlay切り替え失敗: ${e.message}"
+            }
+        }
+
+        carabinerCheckBox.selectedProperty().addListener { _, _, enabled ->
+            if (enabled) carabinerBridge.start() else carabinerBridge.stop()
+        }
 
         val destinationInput = TextField().apply { promptText = "host:port (例: 192.168.1.50:9000)" }
         val addDestinationButton = Button("宛先追加")
@@ -75,29 +132,9 @@ class Main : Application() {
             destinationList.items.remove(selected)
         }
 
-        startButton.setOnAction {
-            status.text = "Receiver: 起動中(CDJ検出待ち)"
-            // beat-linkはCDJが見つかるまで内部で数十秒ブロックし得るため、JavaFXスレッドを
-            // フリーズさせないよう別スレッドで起動する
-            Thread({ receiver.start() }, "Receiver Startup").apply { isDaemon = true }.start()
-            // 10Hzでデッキ状態をポーリングし、Senderへ渡してOSC配信する
-            scheduler.scheduleAtFixedRate({
-                val decks = (1..4).mapNotNull { receiver.pollDeck(it) }
-                decks.forEach {
-                    sender.update(it)
-                    overlayServer.update(it)
-                    if (it.master) carabinerBridge.updateMasterTempo(it.bpm)
-                }
-                val lines = decks.joinToString("\n") {
-                    "deck ${it.playerNumber}: ${it.title ?: "-"} / ${it.artist ?: "-"} " +
-                        "(${it.positionMs ?: -1}ms, ${"%.1f".format(it.bpm)}bpm${if (it.master) ", MASTER" else ""})"
-                }
-                Platform.runLater { log.text = lines }
-            }, 0, 100, TimeUnit.MILLISECONDS)
-        }
-
+        val toggleRow = HBox(12.0, receiverCheckBox, overlayCheckBox, carabinerCheckBox)
         val destinationRow = HBox(8.0, destinationInput, addDestinationButton, removeDestinationButton)
-        val root = VBox(10.0, status, startButton, destinationRow, destinationList, log).apply {
+        val root = VBox(10.0, status, toggleRow, destinationRow, destinationList, log).apply {
             padding = Insets(16.0)
         }
         stage.scene = Scene(root, 520.0, 480.0)

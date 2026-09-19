@@ -114,10 +114,26 @@ OBSのBrowser Sourceで読み込む埋め込み用HTMLを想定。
 
 ```
 GET  /                    -- オーバーレイ本体のHTML/CSS/JS(OBSのBrowser SourceにこのURLを指定するだけでよい)
+GET  /monitor             -- VJが自分のブラウザで確認する非透過モニターページ(波形描画つき、2026-09-19追加)
 GET  /art/deck/{n}        -- 現在のジャケット画像をそのまま返す(<img src="...">で直接読み込める)
+GET  /waveform/deck/{n}          -- 現在の波形プレビューの生バイト列(2026-09-19追加)
+GET  /waveform-detail/deck/{n}   -- 現在の高解像度波形(WaveformDetail)の生バイト列(2026-09-19追加)
 WS   /ws                  -- デッキ状態(タイトル/アーティスト/アルバム/BPM/再生位置/Masterフラグ/波形)を
                               JSONでプッシュ配信
 ```
+
+**VJ向け配信経路について(2026-09-19追加)**: OSC(Sender)は宛先をSender側に手動登録する
+ユニキャスト方式のため、「VJ側で特に設定せずに受信できる」という要望には合わなかった。
+Overlayは元々OBS向けだが、クライアント側から接続しに行くpull型でSender側の宛先登録が
+不要なため、`/monitor`ページと`/waveform/deck/{n}`を追加してVJ向けの情報取得にも
+流用できるようにした。OSC/Senderは既存のVJソフト連携用途のため削除せず併存させている。
+
+**高解像度波形(WaveformDetail)について(2026-09-19追加)**: 当初プレビュー波形のみ採用した
+理由は「UDP/OSC配信には大きすぎる」ためだったが、これはOSC(Sender)についての制約であり
+HTTPベースのOverlay/`/monitor`には当てはまらない。そのため`Receiver`で
+`WaveformFinder.setFindDetails(true)`を有効化し、`/monitor`では高解像度波形を優先して
+取得・描画し、取得できない場合のみプレビュー波形にフォールバックする。OSC側は従来通り
+プレビュー波形のみを送る(`DeckSnapshot.waveform`)。
 
 - OSCの宛先管理・NIC選択とは独立して、常にlocalhost(またはOBSが同一LAN上の別PCの場合はそのNIC)で待受する
 - 実装は`core`モジュールに配置(JavaFX非依存、将来のSender CLI版でも流用可能)。

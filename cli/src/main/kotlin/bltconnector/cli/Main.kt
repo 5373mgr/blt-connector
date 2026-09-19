@@ -1,10 +1,12 @@
 package bltconnector.cli
 
+import bltconnector.core.carabiner.CarabinerBridge
 import bltconnector.core.overlay.OverlayServer
 import bltconnector.core.receiver.Receiver
 import bltconnector.core.sender.Destination
 import bltconnector.core.sender.Sender
 import org.slf4j.LoggerFactory
+import java.io.File
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
@@ -36,9 +38,19 @@ fun main(args: Array<String>) {
         logger.warn("指定された送信用NIC '{}' のIPv4アドレスが見つかりませんでした。自動選択にフォールバックします。", config.outputInterface)
     }
 
+    // 設定ファイルと同じディレクトリに overlay.html を置くと、リビルドなしでOverlayの見た目を差し替えられる。
+    val configDir = File(configPath).absoluteFile.parentFile
+    val overlayHtmlPath = configDir.resolve("overlay.html").path
+
     val receiver = Receiver()
     val sender = Sender(localBindAddress = outputAddress)
-    val overlay = OverlayServer(port = config.overlayPort, bindAddress = outputAddress?.hostAddress)
+    val overlay = OverlayServer(
+        port = config.overlayPort,
+        bindAddress = outputAddress?.hostAddress,
+        htmlOverridePath = overlayHtmlPath,
+        // Overlayのレイアウト設定(overlay-layout.json)とアップロードしたフォント(fonts/)の保存先。
+        assetsDir = configDir.path,
+    )
 
     config.destinations.forEach { d ->
         try {
@@ -49,6 +61,12 @@ fun main(args: Array<String>) {
         }
     }
 
+    // Master BPMをAbleton Linkへブリッジする(GUI版には元々あったがCLI版に組み込み漏れしていた)。
+    // Masterデッキの実効BPMを毎tick送り続けるので、他のLink参加ソフト側を「Sync専用(ローカルで
+    // テンポを変更しない)」設定にしておけば、実質的にCDJのMasterがテンポを主導する形になる。
+    val carabinerBridge = CarabinerBridge(port = config.carabinerPort)
+    carabinerBridge.start()
+
     // beat-link(VirtualCdj等)はCDJが見つかるまで内部で数十秒ブロックすることがあるため、
     // Overlay/設定Web GUIを先に起動してからReceiverは別スレッドで起動する
     // (CDJの電源投入前にCLIを起動しても設定画面にアクセスできるようにするため)。
@@ -58,7 +76,14 @@ fun main(args: Array<String>) {
     webServer.startServer()
 
     logger.info("Overlay:   http://localhost:{}/", config.overlayPort)
+    logger.info("Overlayレイアウトエディタ: http://localhost:{}/editor", config.overlayPort)
     logger.info("設定画面:  http://localhost:{}/", config.webGuiPort)
+    logger.info("Overlay見た目を差し替えるには {} を配置してください(なければ同梱HTMLを使用)", overlayHtmlPath)
+    logger.info(
+        "Ableton Link: {}(port={})",
+        if (carabinerBridge.isSupported()) "有効" else "このプラットフォーム向けCarabinerバイナリが無いため無効",
+        config.carabinerPort,
+    )
 
     Thread({
         logger.info("Receiver starting; waiting for Pro DJ Link devices...")
@@ -71,6 +96,7 @@ fun main(args: Array<String>) {
             (1..4).mapNotNull { receiver.pollDeck(it) }.forEach {
                 sender.update(it)
                 overlay.update(it)
+                if (it.master) carabinerBridge.updateMasterTempo(it.bpm)
             }
         } catch (e: Exception) {
             logger.warn("デッキ状態の更新中にエラーが発生しました", e)
@@ -84,6 +110,7 @@ fun main(args: Array<String>) {
         sender.close()
         overlay.stopServer()
         webServer.stopServer()
+        carabinerBridge.stop()
     })
 
     Thread.currentThread().join()

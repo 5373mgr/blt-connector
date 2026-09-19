@@ -1,7 +1,9 @@
 package bltconnector.cli
 
 import fi.iki.elonen.NanoHTTPD
+import org.slf4j.LoggerFactory
 import java.net.NetworkInterface
+import kotlin.system.exitProcess
 
 /**
  * NIC選択・OSC宛先管理を行う組み込みWeb GUI。
@@ -9,12 +11,51 @@ import java.net.NetworkInterface
  * (反映にはプロセス再起動が必要。旧netconfigと同じ「保存後は手動再起動」方針)。
  */
 class ConfigWebServer(port: Int, private val configPath: String) : NanoHTTPD(port) {
+    private val logger = LoggerFactory.getLogger(ConfigWebServer::class.java)
 
     override fun serve(session: IHTTPSession): Response {
         return when {
             session.method == Method.POST && session.uri == "/save" -> handleSave(session)
+            session.method == Method.POST && session.uri == "/restart" -> handleRestart()
             else -> newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", renderPage(null))
         }
+    }
+
+    /**
+     * プロセスを再起動する。SSH端末を開かずに設定変更を反映できるようにするための機能
+     * (このアプリは設定保存だけではホットリロードしないため)。
+     * `ProcessHandle`から現在のJVM起動コマンドをそのまま再現し、新プロセスを起動してから
+     * 自分自身を終了する(systemd等の外部プロセス管理に依存しない)。
+     */
+    private fun handleRestart(): Response {
+        Thread({
+            Thread.sleep(500) // レスポンスを書き終える猶予
+            restartProcess()
+        }, "Restart").apply { isDaemon = true }.start()
+        return newFixedLengthResponse(
+            Response.Status.OK, "text/html; charset=utf-8",
+            renderPage("再起動しています。数秒後にページを再読み込みしてください。"),
+        )
+    }
+
+    private fun restartProcess() {
+        val info = ProcessHandle.current().info()
+        val command = info.command().orElse(null)
+        if (command == null) {
+            logger.error("再起動に必要なプロセス起動情報が取得できませんでした")
+            return
+        }
+        val args = info.arguments().orElse(emptyArray())
+        try {
+            ProcessBuilder(listOf(command) + args)
+                .directory(java.io.File(System.getProperty("user.dir")))
+                .inheritIO()
+                .start()
+        } catch (e: Exception) {
+            logger.error("新プロセスの起動に失敗しました。再起動を中止します", e)
+            return
+        }
+        exitProcess(0)
     }
 
     private fun handleSave(session: IHTTPSession): Response {
@@ -43,6 +84,7 @@ class ConfigWebServer(port: Int, private val configPath: String) : NanoHTTPD(por
             outputInterface = outputInterface,
             overlayPort = overlayPort,
             webGuiPort = webGuiPort,
+            carabinerPort = Config.load(configPath).carabinerPort, // フォームに項目が無いため既存値を渡す
             destinations = destinations,
         )
         Config.save(configPath, newConfig)
@@ -120,6 +162,12 @@ class ConfigWebServer(port: Int, private val configPath: String) : NanoHTTPD(por
                 </table>
 
                 <button type="submit">保存</button>
+              </form>
+
+              <h2>プロセス再起動</h2>
+              <p>設定を保存しても実行中のプロセスには反映されません。反映するにはここから再起動してください。</p>
+              <form method="post" action="/restart" onsubmit="return confirm('プロセスを再起動します。よろしいですか?');">
+                <button type="submit">再起動</button>
               </form>
             </body>
             </html>

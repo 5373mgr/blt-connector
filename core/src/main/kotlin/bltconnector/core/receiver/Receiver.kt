@@ -10,6 +10,19 @@ import org.deepsymmetry.beatlink.data.WaveformFinder
 import org.slf4j.LoggerFactory
 
 /**
+ * ホットキュー/メモリーキュー1件分(beat-linkの`CueList.Entry`から変換)。
+ * [hotCueNumber] が0ならメモリーキュー、1以上ならホットキュー番号(1=A, 2=B, ...)。
+ * [colorRgb] は`"#rrggbb"`形式。色情報が無い場合はnull。
+ */
+data class CuePoint(
+    val timeMs: Long,
+    val hotCueNumber: Int,
+    val isLoop: Boolean,
+    val colorRgb: String?,
+    val comment: String,
+)
+
+/**
  * デッキ1台分の現在のスナップショット。
  * beat-linkの各種APIの正確な挙動は実機のCDJ+ネットワークでの検証がまだ済んでいない。
  *
@@ -30,8 +43,24 @@ data class DeckSnapshot(
     val originalBpm: Double?,
     val waveform: ByteArray?,
     val waveformColor: Boolean,
+    /**
+     * 高解像度波形(beat-linkの`WaveformDetail`)の生バイト列。OSC(Sender)では従来通り
+     * [waveform](プレビュー波形)のみ使う。曲によっては数十KBになり得るため、UDP/OSCでの
+     * 常時配信には使わず、Overlay(HTTP)経由でのみ配信する。
+     */
+    val waveformDetail: ByteArray? = null,
+    val waveformDetailColor: Boolean = false,
     /** ジャケット画像の生バイト列(JPEG想定)。Overlay配信用。 */
     val artwork: ByteArray?,
+    /** ホットキュー/メモリーキューの一覧(Overlay配信用、OSCへは配信しない)。 */
+    val cues: List<CuePoint> = emptyList(),
+    /** rekordboxでトラックに付けられたコメント。 */
+    val comment: String? = null,
+    /**
+     * ミキサー上でこのチャンネルが実際にオンエア(フェーダーが上がっていて音が出ている)か。
+     * Nexus系ミキサーのみ対応(beat-linkの`CdjStatus.isOnAir()`)。
+     */
+    val onAir: Boolean = false,
 )
 
 /**
@@ -84,6 +113,9 @@ class Receiver {
         metadataFinder.start()
         timeFinder.start()
         waveformFinder.setColorPreferred(true)
+        // 高解像度波形(WaveformDetail)も取得する。プレビューと違いOSCでは配信せず、
+        // Overlay(HTTP)経由でのみ使うため、UDPパケットサイズの制約は関係ない。
+        waveformFinder.setFindDetails(true)
         waveformFinder.start()
         artFinder.start()
         started = true
@@ -115,6 +147,7 @@ class Receiver {
         val metadata = metadataFinder.getLatestMetadataFor(playerNumber)
         val positionMs = timeFinder.getTimeFor(playerNumber)
         val waveform = waveformFinder.getLatestPreviewFor(playerNumber)
+        val waveformDetail = waveformFinder.getLatestDetailFor(playerNumber)
         val art = artFinder.getLatestArtFor(playerNumber)
 
         return DeckSnapshot(
@@ -133,9 +166,25 @@ class Receiver {
                 ByteArray(buf.remaining()).also { buf.duplicate().get(it) }
             },
             waveformColor = waveform?.isColor ?: false,
+            waveformDetail = waveformDetail?.data?.let { buf ->
+                ByteArray(buf.remaining()).also { buf.duplicate().get(it) }
+            },
+            waveformDetailColor = waveformDetail?.isColor ?: false,
             artwork = art?.rawBytes?.let { buf ->
                 ByteArray(buf.remaining()).also { buf.duplicate().get(it) }
             },
+            cues = metadata?.cueList?.entries.orEmpty().map { entry ->
+                val color = entry.rekordboxColor ?: entry.embeddedColor
+                CuePoint(
+                    timeMs = entry.cueTime,
+                    hotCueNumber = entry.hotCueNumber,
+                    isLoop = entry.isLoop,
+                    colorRgb = color?.let { String.format("#%02x%02x%02x", it.red, it.green, it.blue) },
+                    comment = entry.comment,
+                )
+            },
+            comment = metadata?.comment,
+            onAir = status.isOnAir,
         )
     }
 }

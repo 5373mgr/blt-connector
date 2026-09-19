@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>BLT Connector - VJ Monitor</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #14161a;
+    font-family: "Segoe UI", "Hiragino Sans", sans-serif;
+    color: #eee;
+  }
+  #decks {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    padding: 16px;
+    box-sizing: border-box;
+  }
+  .deck {
+    background: #1f2229;
+    border-radius: 10px;
+    padding: 14px 16px;
+    opacity: 0.4;
+  }
+  .deck.active { opacity: 1; }
+  .deck.master { outline: 2px solid #ffd23f; }
+  .head { display: flex; align-items: center; gap: 8px; }
+  .player-label {
+    font-size: 12px;
+    color: #999;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+  .master-badge {
+    display: none;
+    font-size: 10px;
+    font-weight: 700;
+    color: #1a1a1a;
+    background: #ffd23f;
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+  .deck.master .master-badge { display: inline-block; }
+  .title {
+    font-size: 18px;
+    font-weight: 600;
+    margin-top: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .artist {
+    font-size: 13px;
+    color: #bbb;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bpm-row { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: #9fe870; }
+  .bpm-row .original { color: #888; }
+  .time-row { display: flex; justify-content: space-between; font-size: 11px; color: #888; margin-top: 8px; }
+  .zoom-row { display: flex; gap: 4px; margin-top: 8px; }
+  .zoom-row button {
+    font-size: 10px;
+    background: #2a2d35;
+    color: #ccc;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+  }
+  .zoom-row button.active { background: #9fe870; color: #14161a; border-color: #9fe870; }
+  canvas.waveform {
+    width: 100%;
+    height: 64px;
+    display: block;
+    margin-top: 4px;
+    background: #0b0c0f;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+  <div id="decks">
+    <div class="deck" id="deck-1" data-player="1">
+      <div class="head">
+        <span class="player-label">DECK 1</span>
+        <span class="master-badge">MASTER</span>
+      </div>
+      <div class="title" id="title-1"></div>
+      <div class="artist" id="artist-1"></div>
+      <div class="bpm-row">
+        <span id="bpm-1"></span>
+        <span class="original" id="original-bpm-1"></span>
+      </div>
+      <div class="zoom-row" data-player="1">
+        <button data-zoom="0" class="active">全体</button>
+        <button data-zoom="30">30s</button>
+        <button data-zoom="10">10s</button>
+        <button data-zoom="3">3s</button>
+      </div>
+      <canvas class="waveform" id="waveform-1"></canvas>
+      <div class="time-row"><span id="position-1">0:00</span><span id="duration-1">0:00</span></div>
+    </div>
+    <div class="deck" id="deck-2" data-player="2">
+      <div class="head">
+        <span class="player-label">DECK 2</span>
+        <span class="master-badge">MASTER</span>
+      </div>
+      <div class="title" id="title-2"></div>
+      <div class="artist" id="artist-2"></div>
+      <div class="bpm-row">
+        <span id="bpm-2"></span>
+        <span class="original" id="original-bpm-2"></span>
+      </div>
+      <div class="zoom-row" data-player="2">
+        <button data-zoom="0" class="active">全体</button>
+        <button data-zoom="30">30s</button>
+        <button data-zoom="10">10s</button>
+        <button data-zoom="3">3s</button>
+      </div>
+      <canvas class="waveform" id="waveform-2"></canvas>
+      <div class="time-row"><span id="position-2">0:00</span><span id="duration-2">0:00</span></div>
+    </div>
+    <div class="deck" id="deck-3" data-player="3">
+      <div class="head">
+        <span class="player-label">DECK 3</span>
+        <span class="master-badge">MASTER</span>
+      </div>
+      <div class="title" id="title-3"></div>
+      <div class="artist" id="artist-3"></div>
+      <div class="bpm-row">
+        <span id="bpm-3"></span>
+        <span class="original" id="original-bpm-3"></span>
+      </div>
+      <div class="zoom-row" data-player="3">
+        <button data-zoom="0" class="active">全体</button>
+        <button data-zoom="30">30s</button>
+        <button data-zoom="10">10s</button>
+        <button data-zoom="3">3s</button>
+      </div>
+      <canvas class="waveform" id="waveform-3"></canvas>
+      <div class="time-row"><span id="position-3">0:00</span><span id="duration-3">0:00</span></div>
+    </div>
+    <div class="deck" id="deck-4" data-player="4">
+      <div class="head">
+        <span class="player-label">DECK 4</span>
+        <span class="master-badge">MASTER</span>
+      </div>
+      <div class="title" id="title-4"></div>
+      <div class="artist" id="artist-4"></div>
+      <div class="bpm-row">
+        <span id="bpm-4"></span>
+        <span class="original" id="original-bpm-4"></span>
+      </div>
+      <div class="zoom-row" data-player="4">
+        <button data-zoom="0" class="active">全体</button>
+        <button data-zoom="30">30s</button>
+        <button data-zoom="10">10s</button>
+        <button data-zoom="3">3s</button>
+      </div>
+      <canvas class="waveform" id="waveform-4"></canvas>
+      <div class="time-row"><span id="position-4">0:00</span><span id="duration-4">0:00</span></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const lastTrackVersion = {};
+  const waveformBytes = {}; // 高解像度波形(WaveformDetail)。取得できない曲はプレビューにフォールバック
+  const waveformIsPreview = {};
+  // 波形取得済みのtrackVersion。曲変化直後はCDJ側の波形データ生成がまだ間に合っていないことが
+  // あるため、「曲が変わった瞬間」ではなく「hasWaveform/hasWaveformDetailがtrueになった時点」で
+  // 取得する。detailは届くのがpreviewより遅いことがあるため、preview取得後もdetailを追いかけて
+  // 昇格させる(fetchedDetailVersionで別管理)。
+  const fetchedWaveformVersion = {};
+  const fetchedDetailVersion = {};
+  const deckState = {};
+  const zoomSeconds = {}; // 0 = 全体表示。それ以外は再生位置を中心にその秒数だけ表示する
+
+  document.querySelectorAll(".zoom-row").forEach((row) => {
+    const n = row.dataset.player;
+    row.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => {
+        zoomSeconds[n] = Number(button.dataset.zoom);
+        row.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === button));
+        drawWaveform(n);
+      });
+    });
+  });
+
+  function connect() {
+    const ws = new WebSocket("ws://" + location.host + "/ws");
+    ws.onmessage = (event) => {
+      try {
+        applyUpdate(JSON.parse(event.data));
+      } catch (e) {
+        console.error("failed to parse monitor update", e);
+      }
+    };
+    ws.onclose = () => setTimeout(connect, 1000);
+    ws.onerror = () => ws.close();
+  }
+
+  function formatTime(ms) {
+    if (ms == null || ms < 0) return "0:00";
+    const totalSec = Math.floor(ms / 1000);
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return m + ":" + String(s).padStart(2, "0");
+  }
+
+  function applyUpdate(deck) {
+    const n = deck.playerNumber;
+    const root = document.getElementById("deck-" + n);
+    if (!root) return;
+    deckState[n] = deck;
+
+    const hasTrack = deck.title && deck.title.length > 0;
+    root.classList.toggle("active", hasTrack);
+    root.classList.toggle("master", !!deck.master);
+    if (!hasTrack) return;
+
+    // 再生位置・現在BPMは毎tick変わるので常に更新する
+    document.getElementById("bpm-" + n).textContent = deck.bpm ? deck.bpm.toFixed(1) + " BPM" : "";
+    document.getElementById("position-" + n).textContent = formatTime(deck.positionMs);
+
+    // タイトル/アーティスト/原曲BPM/曲長は曲が変わった時(trackVersion変化)だけ更新する
+    if (lastTrackVersion[n] !== deck.trackVersion) {
+      lastTrackVersion[n] = deck.trackVersion;
+      document.getElementById("title-" + n).textContent = deck.title || "";
+      document.getElementById("artist-" + n).textContent = deck.artist || "";
+      document.getElementById("original-bpm-" + n).textContent =
+        deck.originalBpm > 0 ? "(原曲 " + deck.originalBpm.toFixed(1) + ")" : "";
+      document.getElementById("duration-" + n).textContent = formatTime(deck.durationMs);
+      waveformBytes[n] = null; // 新しい曲なので古い波形をクリアする(取得済みフラグは触らない)
+    }
+
+    // 曲変化直後はCDJ側の波形生成がまだ間に合っておらずhasWaveform(Detail)がfalseのことが
+    // あるため、trueになるまで毎tick確認して、なった時点で取得する。
+    if (deck.hasWaveformDetail && fetchedDetailVersion[n] !== deck.trackVersion) {
+      fetchedDetailVersion[n] = deck.trackVersion;
+      fetch("/waveform-detail/deck/" + n + "?v=" + deck.trackVersion)
+        .then((res) => res.arrayBuffer())
+        .then((buf) => {
+          waveformBytes[n] = new Uint8Array(buf);
+          waveformIsPreview[n] = false;
+          drawWaveform(n);
+        })
+        .catch((e) => {
+          console.error("failed to fetch waveform detail", e);
+          fetchedDetailVersion[n] = null; // 失敗したら次のtickで再試行できるようにする
+        });
+    } else if (!deck.hasWaveformDetail && deck.hasWaveform && fetchedWaveformVersion[n] !== deck.trackVersion) {
+      fetchedWaveformVersion[n] = deck.trackVersion;
+      fetch("/waveform/deck/" + n + "?v=" + deck.trackVersion)
+        .then((res) => res.arrayBuffer())
+        .then((buf) => {
+          waveformBytes[n] = new Uint8Array(buf);
+          waveformIsPreview[n] = true;
+          drawWaveform(n);
+        })
+        .catch((e) => {
+          console.error("failed to fetch waveform preview", e);
+          fetchedWaveformVersion[n] = null;
+        });
+    }
+
+    drawWaveform(n); // 再生位置のプレイヘッドは毎tick動かす
+  }
+
+  const PREVIEW_INTENSE_COLOR = "rgb(116,246,244)";
+  const PREVIEW_NORMAL_COLOR = "rgb(43,89,255)";
+  const DETAIL_MONO_COLORS = [
+    "rgb(0,104,144)", "rgb(0,136,176)", "rgb(0,168,232)", "rgb(0,184,216)",
+    "rgb(120,184,216)", "rgb(136,192,232)", "rgb(136,192,232)", "rgb(200,224,232)",
+  ];
+
+  /**
+   * beat-linkのWaveformPreview/WaveformDetailと同じバイトレイアウトで高さ・色を求める
+   * (それぞれのJavadoc/segmentHeight・segmentColor実装を参照して移植)。
+   *
+   * - プレビュー mono: 2byte/segment [高さ(下位5bit), 強度(下位3bit)]
+   * - プレビュー color: 6byte/segment、byte[3..5]がR/G/Bの生値。高さ=max(R,G,B)
+   * - 詳細(WaveformDetail) mono: 1byte/frame、下位5bitが高さ、上位3bitが強度(0-7、DETAIL_MONO_COLORS参照)
+   * - 詳細(WaveformDetail) color: 2byte(ビッグエンディアン16bit)/frame、
+   *   bit2-6が高さ、bit13-15がR、bit10-12がG、bit7-9がB(いずれも0-7)
+   */
+  function segmentAt(bytes, isPreview, isColor, frame) {
+    if (isPreview) {
+      if (isColor) {
+        const base = frame * 6;
+        const r = bytes[base + 3];
+        const g = bytes[base + 4];
+        const b = bytes[base + 5];
+        const height = Math.max(r, g, b);
+        if (height === 0) return { height: 0, color: "rgb(0,0,0)" };
+        const scale = 255 / height;
+        return {
+          height,
+          color: "rgb(" + Math.round(r * scale) + "," + Math.round(g * scale) + "," + Math.round(b * scale) + ")",
+        };
+      }
+      const base = frame * 2;
+      const height = bytes[base] & 0x1f;
+      const intensity = bytes[base + 1] & 0x07;
+      return { height, color: intensity >= 5 ? PREVIEW_INTENSE_COLOR : PREVIEW_NORMAL_COLOR };
+    }
+    if (isColor) {
+      const base = frame * 2;
+      const bits = bytes[base] * 256 + bytes[base + 1];
+      const height = (bits >> 2) & 0x1f;
+      const red = (bits >> 13) & 7;
+      const green = (bits >> 10) & 7;
+      const blue = (bits >> 7) & 7;
+      // beat-linkのWaveformDetail.segmentColor()自体がColor(red, blue, green)という順で
+      // 引数を渡している(G/Bが入れ替わっている)ため、見た目を合わせて同じ順で組む。
+      return {
+        height,
+        color: "rgb(" + Math.round((red * 255) / 7) + "," + Math.round((blue * 255) / 7) + "," + Math.round((green * 255) / 7) + ")",
+      };
+    }
+    const height = bytes[frame] & 0x1f;
+    const colorIndex = (bytes[frame] & 0xe0) >> 5;
+    return { height, color: DETAIL_MONO_COLORS[colorIndex] };
+  }
+
+  const MS_PER_FRAME = 1000 / 150; // 半フレーム = 1/150秒
+
+  /**
+   * 表示するミリ秒範囲[startMs, endMs)を決める。ズームなし(0)なら曲全体。
+   * ズームありなら、現在の再生位置を中心にその秒数だけを表示し(CDJ風の追従)、
+   * トラック端では表示範囲をクランプする。
+   */
+  function visibleRangeMs(n, deck) {
+    const durationMs = deck.durationMs > 0 ? deck.durationMs : 0;
+    const zoom = zoomSeconds[n] || 0;
+    if (zoom <= 0 || durationMs === 0) {
+      return { startMs: 0, endMs: durationMs };
+    }
+    const windowMs = zoom * 1000;
+    const positionMs = deck.positionMs >= 0 ? deck.positionMs : 0;
+    let startMs = positionMs - windowMs / 2;
+    startMs = Math.max(0, Math.min(startMs, Math.max(0, durationMs - windowMs)));
+    return { startMs, endMs: startMs + windowMs };
+  }
+
+  function drawWaveform(n) {
+    const canvas = document.getElementById("waveform-" + n);
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (width === 0 || height === 0) return;
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const deck = deckState[n];
+    if (!deck) return;
+    const { startMs, endMs } = visibleRangeMs(n, deck);
+    const windowMs = Math.max(1, endMs - startMs);
+
+    const bytes = waveformBytes[n];
+    if (bytes) {
+      const isPreview = !!waveformIsPreview[n];
+      const isColor = isPreview ? !!deck.waveformColor : !!deck.waveformDetailColor;
+      const bytesPerFrame = isPreview ? (isColor ? 6 : 2) : (isColor ? 2 : 1);
+      const frameCount = Math.floor(bytes.length / bytesPerFrame);
+      const startFrame = Math.max(0, Math.min(frameCount, Math.round(startMs / MS_PER_FRAME)));
+      const endFrame = Math.max(startFrame, Math.min(frameCount, Math.round(endMs / MS_PER_FRAME)));
+      const visibleFrameCount = endFrame - startFrame;
+
+      if (visibleFrameCount > 0) {
+        // canvasの1列ごとに、表示範囲内の対応するフレームを平均して1本の棒として描く
+        // (フル解像度の波形は数万フレームになり得るため、列数まで間引く。ズーム時は
+        // 表示範囲だけがこの間引き対象になるので、ズームするほど1フレームあたりの
+        // 解像度が上がる)
+        const columns = Math.max(1, Math.round(width));
+        for (let col = 0; col < columns; col++) {
+          const colStartFrame = startFrame + Math.floor((col / columns) * visibleFrameCount);
+          const colEndFrame = startFrame + Math.floor(((col + 1) / columns) * visibleFrameCount);
+          let heightSum = 0;
+          let lastColor = null;
+          let count = 0;
+          for (let f = colStartFrame; f < Math.max(colEndFrame, colStartFrame + 1) && f < frameCount; f++) {
+            const seg = segmentAt(bytes, isPreview, isColor, f);
+            heightSum += seg.height;
+            lastColor = seg.color;
+            count++;
+          }
+          if (count === 0 || lastColor === null) continue;
+          const barHeight = (heightSum / count / 31) * height;
+          ctx.fillStyle = lastColor;
+          ctx.fillRect(col, height - barHeight, 1, barHeight);
+        }
+      }
+    }
+
+    // ホットキュー/メモリーキューのマーカー(表示範囲内のみ)
+    (deck.cues || []).forEach((cue) => {
+      if (cue.timeMs < startMs || cue.timeMs >= endMs) return;
+      const x = ((cue.timeMs - startMs) / windowMs) * width;
+      const color = cue.color || (cue.hotCue > 0 ? "#ff3b30" : "#ffffff");
+      ctx.strokeStyle = color;
+      ctx.lineWidth = cue.hotCue > 0 ? 2 : 1;
+      ctx.globalAlpha = cue.hotCue > 0 ? 0.9 : 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      if (cue.hotCue > 0) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x - 4, 0, 8, 8);
+        ctx.fillStyle = "#14161a";
+        ctx.font = "bold 8px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(String.fromCharCode(64 + cue.hotCue), x, 6.5);
+      }
+    });
+
+    if (deck.durationMs > 0 && deck.positionMs >= 0 && deck.positionMs >= startMs && deck.positionMs <= endMs) {
+      const x = ((deck.positionMs - startMs) / windowMs) * width;
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+  }
+
+  window.addEventListener("resize", () => {
+    Object.keys(deckState).forEach((n) => drawWaveform(n));
+  });
+
+  connect();
+})();
+</script>
+</body>
+</html>
