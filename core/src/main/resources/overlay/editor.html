@@ -153,7 +153,8 @@
     color: #999;
     margin-top: 8px;
   }
-  #transitionSettings select {
+  #transitionSettings select,
+  #transitionSettings input[type=number] {
     width: 100%;
     box-sizing: border-box;
     background: #14161a;
@@ -219,6 +220,8 @@
           <option value="450">普通</option>
           <option value="800">ゆっくり</option>
         </select>
+        <label>切り替わるまでの保持時間(秒)</label>
+        <input type="number" id="holdSeconds" min="0" max="30" step="0.5" value="0">
       </div>
       <h2>要素</h2>
       <div class="add-row">
@@ -396,6 +399,7 @@
   function syncTransitionControls() {
     document.getElementById("transitionPattern").value = layout.transition || "fade";
     document.getElementById("transitionSpeed").value = String(layout.transitionMs || 450);
+    document.getElementById("holdSeconds").value = String(layout.holdSeconds || 0);
   }
 
   document.getElementById("transitionPattern").addEventListener("change", (e) => {
@@ -405,6 +409,10 @@
   document.getElementById("transitionSpeed").addEventListener("change", (e) => {
     pushUndo();
     layout.transitionMs = Number(e.target.value);
+  });
+  document.getElementById("holdSeconds").addEventListener("focus", () => pushUndo());
+  document.getElementById("holdSeconds").addEventListener("change", (e) => {
+    layout.holdSeconds = Math.max(0, Number(e.target.value) || 0);
   });
 
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }

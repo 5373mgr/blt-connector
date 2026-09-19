@@ -35,7 +35,7 @@ class LayoutStore(private val baseDir: String) {
     private companion object {
         /** 左下にオンエア中の曲(ジャケット/曲名/アーティスト/アルバム/コメント)を並べた初期配置。 */
         val DEFAULT_LAYOUT_JSON = """
-            {"transition":"fade","transitionMs":450,"elements":[
+            {"transition":"fade","transitionMs":450,"holdSeconds":0,"elements":[
               {"id":"art1","type":"image","variable":"onair","x":2,"y":68,"width":12,"height":21,"visible":true},
               {"id":"text1","type":"text","template":"{onair-track-name}","x":15,"y":70,"width":50,"height":8,"fontFamily":"sans-serif","fontSize":28,"color":"#ffffff","visible":true},
               {"id":"text2","type":"text","template":"{onair-artist-name}","x":15,"y":78,"width":50,"height":6,"fontFamily":"sans-serif","fontSize":18,"color":"#cccccc","visible":true},

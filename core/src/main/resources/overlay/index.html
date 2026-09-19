@@ -73,6 +73,7 @@
 (function () {
   let layout = { elements: [] };
   let transitionMs = 450;
+  let holdMs = 0;
   const lastArtVersion = {};
   // 要素ごとの表示状態(現在表示中か、直近で描画した内容は何か)。切り替わり時の
   // フェードアウト→内容差し替え→フェードインの制御に使う。
@@ -110,6 +111,9 @@
     stage.className = "transition-" + pattern;
     stage.style.setProperty("--t-dur", transitionMs + "ms");
 
+    // 新しい曲を検知してから、実際に表示を切り替えるまで待つ時間(チラつき防止)。
+    holdMs = Math.max(0, Number(layout.holdSeconds) || 0) * 1000;
+
     (layout.elements || []).forEach((cfg) => {
       const el = document.createElement(cfg.type === "image" ? "img" : "div");
       el.id = cfg.id;
@@ -124,7 +128,7 @@
         el.style.color = cfg.color || "#ffffff";
       }
       stage.appendChild(el);
-      elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null };
+      elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null, desiredKey: undefined, holdTimer: null };
     });
   }
 
@@ -145,16 +149,33 @@
   }
 
   /**
-   * テキスト要素を更新する。表示⇔非表示、および表示したまま内容だけ変わる場合(曲の
-   * 切り替わり等)のどちらも、選択中の切り替えエフェクトでフェードアウト→内容差し替え→
+   * テキスト要素を更新する。新しい内容(または表示/非表示の変化)を検知しても、
+   * holdMsの間その状態が続かない限りは実際の表示切り替えを保留する(チラつき防止)。
+   * 保留時間中にさらに内容が変わったら、そちらを新たな保留対象としてタイマーを
+   * 仕切り直す(安定するまで何度でも先送りする、いわゆるdebounce)。
+   * 実際に切り替える際は、選択中の切り替えエフェクトでフェードアウト→内容差し替え→
    * フェードインさせる(transitionMs=0の"none"の場合は即座に差し替える)。
    */
   function updateTextElement(cfg, el, vars) {
     const state = elementState[cfg.id] || (elementState[cfg.id] = { shown: false, contentKey: null });
     const text = applyTemplate(cfg.template || "", vars);
     const shouldShow = cfg.visible !== false && text.trim().length > 0;
+    const desiredKey = shouldShow ? text : null;
 
-    if (!shouldShow) {
+    if (state.desiredKey === desiredKey) return;
+    state.desiredKey = desiredKey;
+    if (state.holdTimer) clearTimeout(state.holdTimer);
+
+    const commit = () => {
+      state.holdTimer = null;
+      applyTextState(el, state, desiredKey);
+    };
+    if (holdMs <= 0) commit();
+    else state.holdTimer = setTimeout(commit, holdMs);
+  }
+
+  function applyTextState(el, state, desiredKey) {
+    if (desiredKey === null) {
       if (state.shown) {
         el.classList.remove("visible");
         state.shown = false;
@@ -164,39 +185,57 @@
     }
 
     if (!state.shown) {
-      el.textContent = text;
-      state.contentKey = text;
+      el.textContent = desiredKey;
+      state.contentKey = desiredKey;
       state.shown = true;
       requestAnimationFrame(() => el.classList.add("visible"));
       return;
     }
 
-    if (state.contentKey === text) return;
-    state.contentKey = text;
+    if (state.contentKey === desiredKey) return;
+    state.contentKey = desiredKey;
     if (transitionMs <= 0) {
-      el.textContent = text;
+      el.textContent = desiredKey;
       return;
     }
     el.classList.remove("visible");
     setTimeout(() => {
       // 待っている間にさらに内容が変わっていたら、この古い更新は反映しない。
-      if (state.contentKey !== text) return;
-      el.textContent = text;
+      if (state.contentKey !== desiredKey) return;
+      el.textContent = desiredKey;
       el.classList.add("visible");
     }, transitionMs);
   }
 
   /**
-   * ジャケット画像要素を更新する。読み込みが終わるまでは表示しない(壊れた画像アイコンを
-   * 一切出さないため)。成功時だけ表示・バージョン確定し、失敗時は次tickで再試行する。
-   * 既に表示中の状態で別の曲(=別バージョン)に変わった場合は、フェードアウトしてから
-   * 新しい画像を読み込み、読み込めたらフェードインする。
+   * ジャケット画像要素を更新する。テキストと同様、新しいバージョン(または表示/非表示の
+   * 変化)を検知してもholdMsの間安定するまでは実際の切り替えを保留する。
+   * 読み込みが終わるまでは表示しない(壊れた画像アイコンを一切出さないため)。
+   * 成功時だけ表示・バージョン確定し、失敗時は次tickで再試行する。
    */
   function updateImageElement(cfg, el, vars) {
-    const state = elementState[cfg.id] || (elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null });
+    const state = elementState[cfg.id] ||
+      (elementState[cfg.id] = { shown: false, contentKey: null, pendingKey: null });
     const hasArt = vars[cfg.variable + "-has-art"] === "true";
+    const shouldShow = hasArt && cfg.visible !== false;
+    const version = vars[cfg.variable + "-art-version"];
+    const playerNumber = vars[cfg.variable + "-player-number"];
+    const desiredKey = shouldShow ? version : null;
 
-    if (!hasArt || cfg.visible === false) {
+    if (state.desiredKey === desiredKey) return;
+    state.desiredKey = desiredKey;
+    if (state.holdTimer) clearTimeout(state.holdTimer);
+
+    const commit = () => {
+      state.holdTimer = null;
+      applyImageState(cfg, el, state, desiredKey, playerNumber);
+    };
+    if (holdMs <= 0) commit();
+    else state.holdTimer = setTimeout(commit, holdMs);
+  }
+
+  function applyImageState(cfg, el, state, desiredKey, playerNumber) {
+    if (desiredKey === null) {
       if (state.shown) {
         el.classList.remove("visible");
         state.shown = false;
@@ -208,8 +247,7 @@
       return;
     }
 
-    const playerNumber = vars[cfg.variable + "-player-number"];
-    const version = vars[cfg.variable + "-art-version"];
+    const version = desiredKey;
     if (lastArtVersion[cfg.id] === version || state.pendingKey === version) return;
     state.pendingKey = version;
 
