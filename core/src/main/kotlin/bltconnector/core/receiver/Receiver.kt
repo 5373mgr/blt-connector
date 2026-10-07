@@ -199,11 +199,18 @@ class Receiver {
      * このキャッシュは正しく作り直されないため、定期的に全プレイヤーのポート番号を監視し、
      * 無効値を検出したらReceiver全体を再起動して復旧する。
      */
+    /** プレイヤー番号→「トラックはロード中なのにメタデータがnullのまま」を最初に観測した時刻(ms)。 */
+    private val metadataStuckSinceMs = mutableMapOf<Int, Long>()
+
+    /** プレイヤー番号→直近に復旧(Receiver再起動)を試みた際のtrackKey。同じ曲への再試行を防ぐ。 */
+    private val metadataRecoveryAttemptedFor = mutableMapOf<Int, Any?>()
+
     private fun startDbServerPortWatchdog(waveformStyle: WaveformFinder.WaveformStyle, preferredDeviceNumber: Int) {
         Thread({
             while (shouldRun) {
                 Thread.sleep(DB_SERVER_PORT_WATCHDOG_INTERVAL_MS)
                 if (!shouldRun || !started) continue
+
                 val poisonedPlayer = (1..6).firstOrNull { player ->
                     ConnectionManager.getInstance().getPlayerDBServerPort(player) == INVALID_DB_SERVER_PORT
                 }
@@ -219,8 +226,68 @@ class Receiver {
                     // (そのまま続けると再起動のたびにwatchdogスレッドが増え続けてしまう)。
                     return@Thread
                 }
+
+                val stuckPlayer = findPlayerWithStuckMetadata()
+                if (stuckPlayer != null) {
+                    logger.warn(
+                        "プレイヤー{}でトラックがロード・再生中にもかかわらずメタデータが{}ms以上取得できないため、" +
+                            "Receiverを再起動して復旧を試みます",
+                        stuckPlayer,
+                        METADATA_STUCK_THRESHOLD_MS,
+                    )
+                    stop()
+                    start(waveformStyle, preferredDeviceNumber)
+                    return@Thread
+                }
             }
         }, "Receiver DbServerPort Watchdog").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * beat-link側の既知の不具合への対策その2: `MetadataFinder`はステータスパケットの
+     * USB/SDスロットの空/ロードフラグの変化を見てメディアのマウント/アンマウントを検知するが、
+     * 実機でUSBを素早く抜き差しした際、この検知が正しく働かず「メディアがマウントされた」イベントが
+     * 発火しないまま固着することを確認した(CdjStatus.getBpm()等の生データでは実際に新しいトラックが
+     * 再生されていることが分かるのに、`MetadataFinder.getLatestMetadataFor()`は永久にnullを返し続ける)。
+     *
+     * `removeMount`/`recordMount`はMetadataFinder内部で、外部から選択的に「このスロットを
+     * 再マウント状態として扱い直せ」と指示する公開APIが無いため、こちらもReceiver全体の
+     * 再起動でしか復旧できない。
+     *
+     * トラックが実際にロード・再生中([CdjStatus.getRekordboxId]が0でない)なのにメタデータがnullの
+     * 状態が[METADATA_STUCK_THRESHOLD_MS]以上続いたプレイヤーを返す。同じ曲(trackKey)に対しては
+     * 一度しか復旧を試みない(解析漏れ・書き出し不備等で本当にメタデータが存在しない曲の場合に、
+     * 再起動を無限に繰り返さないため)。
+     */
+    private fun findPlayerWithStuckMetadata(): Int? {
+        val now = System.currentTimeMillis()
+        for (player in 1..6) {
+            val status = try {
+                virtualCdj.getLatestStatusFor(player) as? CdjStatus
+            } catch (e: Exception) {
+                null
+            }
+            if (status == null || status.rekordboxId == 0) {
+                // デバイスが見えていない、またはトラック未ロード: 監視対象から外す
+                metadataStuckSinceMs.remove(player)
+                continue
+            }
+            if (metadataFinder.getLatestMetadataFor(player) != null) {
+                metadataStuckSinceMs.remove(player)
+                continue
+            }
+            val trackKey = DataReference(status.trackSourcePlayer, status.trackSourceSlot, status.rekordboxId, status.trackType)
+            if (metadataRecoveryAttemptedFor[player] == trackKey) {
+                continue // この曲では既に一度復旧を試みて効果が無かった
+            }
+            val stuckSince = metadataStuckSinceMs.getOrPut(player) { now }
+            if (now - stuckSince >= METADATA_STUCK_THRESHOLD_MS) {
+                metadataRecoveryAttemptedFor[player] = trackKey
+                metadataStuckSinceMs.remove(player)
+                return player
+            }
+        }
+        return null
     }
 
     /**
@@ -350,5 +417,11 @@ class Receiver {
 
         /** Pro DJ Linkプロトコル上の「値未確定」を示すセンチネル値。dbserverポート番号としては無効。 */
         private const val INVALID_DB_SERVER_PORT = 0xFFFF
+
+        /**
+         * トラックロード中にメタデータがnullのまま、復旧(再起動)を試みるまで許容する時間。
+         * 通常のdbserver問い合わせの非同期な遅延(数秒程度)を誤検知しないよう、十分長めに取っている。
+         */
+        private const val METADATA_STUCK_THRESHOLD_MS = 15_000L
     }
 }
