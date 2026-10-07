@@ -8,6 +8,13 @@ import java.io.File
 data class DestinationConfig(val name: String, val host: String, val port: Int)
 
 /**
+ * OPUS-QUAD利用時、USBスロット(1〜3)に紐付けるメタデータアーカイブファイルの設定。
+ * アーカイブファイル自体はBeat Link Triggerの「File > Archive Metadata」等で別途作成したものを
+ * このPCに配置し、そのパスを指定する(アーカイブ生成はこのプロジェクトでは行わない)。
+ */
+data class OpusArchiveConfig(val slot: Int, val path: String)
+
+/**
  * Sender/Overlayの設定。Web GUIで編集し、ファイルに保存する。
  * 反映は起動中のプロセスへのホットリロードではなく、プロセス再起動時に読み込む方式(機能を絞る方針)。
  */
@@ -24,6 +31,25 @@ data class Config(
      */
     val waveformStyle: String = "RGB",
     val destinations: List<DestinationConfig> = emptyList(),
+    /**
+     * 外部ソフト「StreamMix Display」互換のOSCスキーマ(`/deck/{n}/...`)での配信先。
+     * 既存の`destinations`(独自スキーマ`/blt/deck/{n}/...`)とは別経路で、両方を同時に使える。
+     * 詳細は docs/BTL_OSC_Documentation.md 参照。
+     */
+    val streamMixDestinations: List<DestinationConfig> = emptyList(),
+    val opusArchives: List<OpusArchiveConfig> = emptyList(),
+    /**
+     * trueの場合、eth0上に他のDHCPサーバーが存在するかを定期的にプローブし、
+     * 存在すればPro DJ Link用DHCPサーバー(dnsmasq)を自動でOFF、いなければ自動でONにする
+     * ([bltconnector.cli.DhcpService]参照)。falseの場合は設定画面からの手動切り替えのみ。
+     */
+    val dhcpAutoMode: Boolean = false,
+    /**
+     * VirtualCdjに明示的に要求させるプレイヤー番号(1〜4)。0(既定)ならbeat-link側の自動選択に任せる。
+     * 実機CDJの台数より大きい番号を指定することで、起動時の自動選択が後から電源投入された実機CDJの
+     * 番号と衝突し続ける問題([bltconnector.core.receiver.Receiver.start]のコメント参照)を避けられる。
+     */
+    val virtualCdjDeviceNumber: Int = 0,
 ) {
     fun toJson(): String {
         val json = JSONObject().apply {
@@ -39,6 +65,21 @@ data class Config(
                     put("port", it.port)
                 }
             }))
+            put("streamMixDestinations", JSONArray(streamMixDestinations.map {
+                JSONObject().apply {
+                    put("name", it.name)
+                    put("host", it.host)
+                    put("port", it.port)
+                }
+            }))
+            put("opusArchives", JSONArray(opusArchives.map {
+                JSONObject().apply {
+                    put("slot", it.slot)
+                    put("path", it.path)
+                }
+            }))
+            put("dhcpAutoMode", dhcpAutoMode)
+            put("virtualCdjDeviceNumber", virtualCdjDeviceNumber)
         }
         return json.toString(2)
     }
@@ -61,6 +102,20 @@ data class Config(
                             DestinationConfig(d.getString("name"), d.getString("host"), d.getInt("port"))
                         }
                     } ?: emptyList(),
+                    streamMixDestinations = json.optJSONArray("streamMixDestinations")?.let { arr ->
+                        (0 until arr.length()).map { i ->
+                            val d = arr.getJSONObject(i)
+                            DestinationConfig(d.getString("name"), d.getString("host"), d.getInt("port"))
+                        }
+                    } ?: emptyList(),
+                    opusArchives = json.optJSONArray("opusArchives")?.let { arr ->
+                        (0 until arr.length()).map { i ->
+                            val o = arr.getJSONObject(i)
+                            OpusArchiveConfig(o.getInt("slot"), o.getString("path"))
+                        }
+                    } ?: emptyList(),
+                    dhcpAutoMode = json.optBoolean("dhcpAutoMode", false),
+                    virtualCdjDeviceNumber = json.optInt("virtualCdjDeviceNumber", 0),
                 )
             } catch (e: Exception) {
                 Config()

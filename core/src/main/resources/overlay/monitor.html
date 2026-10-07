@@ -19,49 +19,59 @@
     box-sizing: border-box;
   }
   .deck {
-    background: #1f2229;
+    background: #16181d;
+    border: 1px solid #2a2d35;
     border-radius: 10px;
     padding: 14px 16px;
-    opacity: 0.4;
+    opacity: 0.45;
+    transition: opacity 0.2s;
   }
   .deck.active { opacity: 1; }
-  .deck.master { outline: 2px solid #ffd23f; }
-  .head { display: flex; align-items: center; gap: 8px; }
-  .player-label {
-    font-size: 12px;
-    color: #999;
-    border: 1px solid #444;
-    border-radius: 4px;
-    padding: 1px 6px;
-  }
-  .master-badge {
-    display: none;
-    font-size: 10px;
-    font-weight: 700;
-    color: #1a1a1a;
-    background: #ffd23f;
-    border-radius: 4px;
-    padding: 1px 6px;
-  }
-  .deck.master .master-badge { display: inline-block; }
+
+  .top-row { display: flex; gap: 10px; align-items: flex-start; }
+  .meta { flex: 1; min-width: 0; }
   .title {
-    font-size: 18px;
+    font-style: italic;
+    font-size: 17px;
     font-weight: 600;
-    margin-top: 8px;
+    color: #f3d35e;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .artist {
     font-size: 13px;
-    color: #bbb;
+    color: #ccc;
+    margin-top: 2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .bpm-row { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: #9fe870; }
-  .bpm-row .original { color: #888; }
-  .time-row { display: flex; justify-content: space-between; font-size: 11px; color: #888; margin-top: 8px; }
+  .album {
+    font-size: 11px;
+    color: #888;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .comment {
+    font-size: 11px;
+    color: #666;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .art {
+    width: 56px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 4px;
+    background: #0b0c0f;
+    flex-shrink: 0;
+    display: none;
+  }
+
   .zoom-row { display: flex; gap: 4px; margin-top: 8px; }
   .zoom-row button {
     font-size: 10px;
@@ -81,20 +91,90 @@
     background: #0b0c0f;
     border-radius: 4px;
   }
+
+  .status-row { display: flex; align-items: stretch; gap: 10px; margin-top: 10px; }
+
+  .player-box {
+    width: 54px;
+    flex-shrink: 0;
+    border: 2px solid #3a3d45;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #555;
+    padding: 4px 0;
+  }
+  .deck.playing .player-box {
+    border-color: #3ddc5a;
+    color: #3ddc5a;
+    background: rgba(61, 220, 90, 0.08);
+  }
+  .onair-chip {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #555;
+    border: 1px solid #5a2222;
+    border-radius: 3px;
+    padding: 1px 4px;
+    margin-bottom: 3px;
+  }
+  .deck.onair .onair-chip { color: #fff; background: #d13a3a; border-color: #d13a3a; }
+  .player-num { font-size: 22px; font-weight: 700; line-height: 1; }
+
+  .lcd-block { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; }
+  .lcd-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+  .lcd-label { font-size: 9px; color: #666; letter-spacing: 0.5px; }
+  .lcd-value {
+    font-family: "Consolas", "SFMono-Regular", Menlo, monospace;
+    font-size: 17px;
+    color: #ff9ecb;
+    letter-spacing: 1px;
+  }
+  .lcd-value.remain { color: #ff6e8e; }
+
+  .tempo-box {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: 2px solid #3a3d45;
+    border-radius: 6px;
+    padding: 4px 10px;
+    min-width: 76px;
+  }
+  .deck.master .tempo-box { border-color: #ffd23f; background: rgba(255, 210, 63, 0.08); }
+  .tempo-top { display: flex; gap: 5px; align-items: center; }
+  .sync-chip {
+    font-size: 8px;
+    font-weight: 700;
+    color: #555;
+    border: 1px solid #444;
+    border-radius: 3px;
+    padding: 1px 4px;
+  }
+  .deck.synced .sync-chip { color: #14161a; background: #9fe870; border-color: #9fe870; }
+  .pitch-value { font-size: 11px; color: #9fe870; font-family: monospace; min-height: 13px; }
+  .tempo-value { font-family: monospace; font-size: 18px; color: #eee; }
+  .master-chip { font-size: 8px; font-weight: 800; color: #3a3d45; margin-top: 2px; letter-spacing: 0.5px; }
+  .deck.master .master-chip { color: #ffd23f; }
 </style>
 </head>
 <body>
   <div id="decks">
     <div class="deck" id="deck-1" data-player="1">
-      <div class="head">
-        <span class="player-label">DECK 1</span>
-        <span class="master-badge">MASTER</span>
-      </div>
-      <div class="title" id="title-1"></div>
-      <div class="artist" id="artist-1"></div>
-      <div class="bpm-row">
-        <span id="bpm-1"></span>
-        <span class="original" id="original-bpm-1"></span>
+      <div class="top-row">
+        <div class="meta">
+          <div class="title" id="title-1"></div>
+          <div class="artist" id="artist-1"></div>
+          <div class="album" id="album-1"></div>
+          <div class="comment" id="comment-1"></div>
+        </div>
+        <img class="art" id="art-1" alt="">
       </div>
       <div class="zoom-row" data-player="1">
         <button data-zoom="0" class="active">全体</button>
@@ -103,18 +183,34 @@
         <button data-zoom="3">3s</button>
       </div>
       <canvas class="waveform" id="waveform-1"></canvas>
-      <div class="time-row"><span id="position-1">0:00</span><span id="duration-1">0:00</span></div>
+      <div class="status-row">
+        <div class="player-box">
+          <span class="onair-chip">ON AIR</span>
+          <span class="player-num">1</span>
+        </div>
+        <div class="lcd-block">
+          <div class="lcd-row"><span class="lcd-label">TIME</span><span class="lcd-value" id="position-1">00:00</span></div>
+          <div class="lcd-row"><span class="lcd-label">REMAIN</span><span class="lcd-value remain" id="remain-1">00:00</span></div>
+        </div>
+        <div class="tempo-box">
+          <div class="tempo-top">
+            <span class="sync-chip">SYNC</span>
+            <span class="pitch-value" id="pitch-1"></span>
+          </div>
+          <span class="tempo-value" id="bpm-1">--.-</span>
+          <span class="master-chip">MASTER</span>
+        </div>
+      </div>
     </div>
     <div class="deck" id="deck-2" data-player="2">
-      <div class="head">
-        <span class="player-label">DECK 2</span>
-        <span class="master-badge">MASTER</span>
-      </div>
-      <div class="title" id="title-2"></div>
-      <div class="artist" id="artist-2"></div>
-      <div class="bpm-row">
-        <span id="bpm-2"></span>
-        <span class="original" id="original-bpm-2"></span>
+      <div class="top-row">
+        <div class="meta">
+          <div class="title" id="title-2"></div>
+          <div class="artist" id="artist-2"></div>
+          <div class="album" id="album-2"></div>
+          <div class="comment" id="comment-2"></div>
+        </div>
+        <img class="art" id="art-2" alt="">
       </div>
       <div class="zoom-row" data-player="2">
         <button data-zoom="0" class="active">全体</button>
@@ -123,18 +219,34 @@
         <button data-zoom="3">3s</button>
       </div>
       <canvas class="waveform" id="waveform-2"></canvas>
-      <div class="time-row"><span id="position-2">0:00</span><span id="duration-2">0:00</span></div>
+      <div class="status-row">
+        <div class="player-box">
+          <span class="onair-chip">ON AIR</span>
+          <span class="player-num">2</span>
+        </div>
+        <div class="lcd-block">
+          <div class="lcd-row"><span class="lcd-label">TIME</span><span class="lcd-value" id="position-2">00:00</span></div>
+          <div class="lcd-row"><span class="lcd-label">REMAIN</span><span class="lcd-value remain" id="remain-2">00:00</span></div>
+        </div>
+        <div class="tempo-box">
+          <div class="tempo-top">
+            <span class="sync-chip">SYNC</span>
+            <span class="pitch-value" id="pitch-2"></span>
+          </div>
+          <span class="tempo-value" id="bpm-2">--.-</span>
+          <span class="master-chip">MASTER</span>
+        </div>
+      </div>
     </div>
     <div class="deck" id="deck-3" data-player="3">
-      <div class="head">
-        <span class="player-label">DECK 3</span>
-        <span class="master-badge">MASTER</span>
-      </div>
-      <div class="title" id="title-3"></div>
-      <div class="artist" id="artist-3"></div>
-      <div class="bpm-row">
-        <span id="bpm-3"></span>
-        <span class="original" id="original-bpm-3"></span>
+      <div class="top-row">
+        <div class="meta">
+          <div class="title" id="title-3"></div>
+          <div class="artist" id="artist-3"></div>
+          <div class="album" id="album-3"></div>
+          <div class="comment" id="comment-3"></div>
+        </div>
+        <img class="art" id="art-3" alt="">
       </div>
       <div class="zoom-row" data-player="3">
         <button data-zoom="0" class="active">全体</button>
@@ -143,18 +255,34 @@
         <button data-zoom="3">3s</button>
       </div>
       <canvas class="waveform" id="waveform-3"></canvas>
-      <div class="time-row"><span id="position-3">0:00</span><span id="duration-3">0:00</span></div>
+      <div class="status-row">
+        <div class="player-box">
+          <span class="onair-chip">ON AIR</span>
+          <span class="player-num">3</span>
+        </div>
+        <div class="lcd-block">
+          <div class="lcd-row"><span class="lcd-label">TIME</span><span class="lcd-value" id="position-3">00:00</span></div>
+          <div class="lcd-row"><span class="lcd-label">REMAIN</span><span class="lcd-value remain" id="remain-3">00:00</span></div>
+        </div>
+        <div class="tempo-box">
+          <div class="tempo-top">
+            <span class="sync-chip">SYNC</span>
+            <span class="pitch-value" id="pitch-3"></span>
+          </div>
+          <span class="tempo-value" id="bpm-3">--.-</span>
+          <span class="master-chip">MASTER</span>
+        </div>
+      </div>
     </div>
     <div class="deck" id="deck-4" data-player="4">
-      <div class="head">
-        <span class="player-label">DECK 4</span>
-        <span class="master-badge">MASTER</span>
-      </div>
-      <div class="title" id="title-4"></div>
-      <div class="artist" id="artist-4"></div>
-      <div class="bpm-row">
-        <span id="bpm-4"></span>
-        <span class="original" id="original-bpm-4"></span>
+      <div class="top-row">
+        <div class="meta">
+          <div class="title" id="title-4"></div>
+          <div class="artist" id="artist-4"></div>
+          <div class="album" id="album-4"></div>
+          <div class="comment" id="comment-4"></div>
+        </div>
+        <img class="art" id="art-4" alt="">
       </div>
       <div class="zoom-row" data-player="4">
         <button data-zoom="0" class="active">全体</button>
@@ -163,7 +291,24 @@
         <button data-zoom="3">3s</button>
       </div>
       <canvas class="waveform" id="waveform-4"></canvas>
-      <div class="time-row"><span id="position-4">0:00</span><span id="duration-4">0:00</span></div>
+      <div class="status-row">
+        <div class="player-box">
+          <span class="onair-chip">ON AIR</span>
+          <span class="player-num">4</span>
+        </div>
+        <div class="lcd-block">
+          <div class="lcd-row"><span class="lcd-label">TIME</span><span class="lcd-value" id="position-4">00:00</span></div>
+          <div class="lcd-row"><span class="lcd-label">REMAIN</span><span class="lcd-value remain" id="remain-4">00:00</span></div>
+        </div>
+        <div class="tempo-box">
+          <div class="tempo-top">
+            <span class="sync-chip">SYNC</span>
+            <span class="pitch-value" id="pitch-4"></span>
+          </div>
+          <span class="tempo-value" id="bpm-4">--.-</span>
+          <span class="master-chip">MASTER</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -206,11 +351,16 @@
   }
 
   function formatTime(ms) {
-    if (ms == null || ms < 0) return "0:00";
+    if (ms == null || ms < 0) return "00:00";
     const totalSec = Math.floor(ms / 1000);
     const m = Math.floor(totalSec / 60);
     const s = totalSec % 60;
-    return m + ":" + String(s).padStart(2, "0");
+    return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+  }
+
+  function formatRemain(positionMs, durationMs) {
+    if (positionMs == null || positionMs < 0 || durationMs == null || durationMs <= 0) return "00:00";
+    return "-" + formatTime(Math.max(0, durationMs - positionMs));
   }
 
   function applyUpdate(deck) {
@@ -219,24 +369,60 @@
     if (!root) return;
     deckState[n] = deck;
 
-    const hasTrack = deck.title && deck.title.length > 0;
+    // トラック未ロード(beat-linkの無効値センチネル対策込みでbpmは未ロード時0になる)なら
+    // タイトル等のメタデータが取得できていなくても非アクティブ表示にする。逆に、メタデータが
+    // 何らかの理由で取れていなくても実際に再生中であれば(bpm>0)アクティブ表示にする
+    // (dbserverのメタデータ問い合わせはタイトル取得と無関係に失敗しうるため、タイトルの有無だけで
+    // 判定すると「再生中なのに何も表示されない」ことがあった)。
+    const hasTrack = deck.bpm > 0;
     root.classList.toggle("active", hasTrack);
+    root.classList.toggle("playing", !!deck.playing);
     root.classList.toggle("master", !!deck.master);
+    root.classList.toggle("onair", !!deck.onAir);
+    root.classList.toggle("synced", !!deck.synced);
     if (!hasTrack) return;
 
-    // 再生位置・現在BPMは毎tick変わるので常に更新する
-    document.getElementById("bpm-" + n).textContent = deck.bpm ? deck.bpm.toFixed(1) + " BPM" : "";
+    // 再生位置・現在BPM・残り時間は毎tick変わるので常に更新する
+    document.getElementById("bpm-" + n).textContent = deck.bpm.toFixed(1);
     document.getElementById("position-" + n).textContent = formatTime(deck.positionMs);
+    document.getElementById("remain-" + n).textContent = formatRemain(deck.positionMs, deck.durationMs);
+    const pitchEl = document.getElementById("pitch-" + n);
+    if (deck.originalBpm > 0) {
+      const pitchPct = (deck.bpm / deck.originalBpm - 1) * 100;
+      pitchEl.textContent = (pitchPct >= 0 ? "+" : "") + pitchPct.toFixed(2) + "%";
+    } else {
+      pitchEl.textContent = "";
+    }
 
-    // タイトル/アーティスト/原曲BPM/曲長は曲が変わった時(trackVersion変化)だけ更新する
+    // タイトル/アーティスト/アルバム/コメントは毎tick反映する(trackVersionが変わった瞬間だけに
+    // 限定していたところ、dbserverへのメタデータ問い合わせが非同期で曲の切り替え検知より遅れて
+    // 届くことがあり、「曲が切り替わった最初のtickでは曲名が空→以後trackVersionが変化しないので
+    // 二度と更新されない」というバグがあった。文字列の代入自体は軽量なので、無駄になっても
+    // 害はない)。
+    document.getElementById("title-" + n).textContent = deck.title || "";
+    document.getElementById("artist-" + n).textContent = deck.artist || "";
+    document.getElementById("album-" + n).textContent = deck.album || "";
+    document.getElementById("comment-" + n).textContent = deck.comment || "";
+
+    // ジャケット画像・波形キャッシュのクリアは曲が変わった時(trackVersion変化)だけでよい
+    // (HTTP取得が絡むため無駄打ちを避ける)。
     if (lastTrackVersion[n] !== deck.trackVersion) {
       lastTrackVersion[n] = deck.trackVersion;
-      document.getElementById("title-" + n).textContent = deck.title || "";
-      document.getElementById("artist-" + n).textContent = deck.artist || "";
-      document.getElementById("original-bpm-" + n).textContent =
-        deck.originalBpm > 0 ? "(原曲 " + deck.originalBpm.toFixed(1) + ")" : "";
-      document.getElementById("duration-" + n).textContent = formatTime(deck.durationMs);
+      const artImg = document.getElementById("art-" + n);
+      if (deck.hasArt) {
+        artImg.src = "/art/deck/" + n + "?v=" + deck.trackVersion;
+        artImg.style.display = "";
+      } else {
+        artImg.removeAttribute("src");
+        artImg.style.display = "none";
+      }
       waveformBytes[n] = null; // 新しい曲なので古い波形をクリアする(取得済みフラグは触らない)
+    } else if (deck.hasArt && !document.getElementById("art-" + n).getAttribute("src")) {
+      // 曲変化直後、ジャケット取得がまだ間に合っていなかった場合に備えて毎tick確認する
+      // (波形と同様、hasArtがtrueになった時点で取得する)
+      const artImg = document.getElementById("art-" + n);
+      artImg.src = "/art/deck/" + n + "?v=" + deck.trackVersion;
+      artImg.style.display = "";
     }
 
     // 曲変化直後はCDJ側の波形生成がまだ間に合っておらずhasWaveform(Detail)がfalseのことが

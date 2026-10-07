@@ -5,6 +5,7 @@ import bltconnector.core.overlay.OverlayServer
 import bltconnector.core.receiver.Receiver
 import bltconnector.core.sender.Destination
 import bltconnector.core.sender.Sender
+import bltconnector.core.sender.StreamMixSender
 import org.deepsymmetry.beatlink.data.WaveformFinder
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -45,6 +46,7 @@ fun main(args: Array<String>) {
 
     val receiver = Receiver()
     val sender = Sender(localBindAddress = outputAddress)
+    val streamMixSender = StreamMixSender(localBindAddress = outputAddress)
     val overlay = OverlayServer(
         port = config.overlayPort,
         bindAddress = outputAddress?.hostAddress,
@@ -61,6 +63,14 @@ fun main(args: Array<String>) {
             logger.warn("配信先の追加に失敗しました: {}", d, e)
         }
     }
+    config.streamMixDestinations.forEach { d ->
+        try {
+            streamMixSender.addDestination(Destination(d.name, InetAddress.getByName(d.host), d.port))
+            logger.info("StreamMix Display配信先を追加: {} ({}:{})", d.name, d.host, d.port)
+        } catch (e: Exception) {
+            logger.warn("StreamMix Display配信先の追加に失敗しました: {}", d, e)
+        }
+    }
 
     // Master BPMをAbleton Linkへブリッジする(GUI版には元々あったがCLI版に組み込み漏れしていた)。
     // Masterデッキの実効BPMを毎tick送り続けるので、他のLink参加ソフト側を「Sync専用(ローカルで
@@ -73,7 +83,10 @@ fun main(args: Array<String>) {
     // (CDJの電源投入前にCLIを起動しても設定画面にアクセスできるようにするため)。
     overlay.startServer()
 
-    val webServer = ConfigWebServer(config.webGuiPort, configPath)
+    val dhcpService = DhcpService(configDir.resolve("dhcp-probe.py"))
+    dhcpService.extractProbeScript()
+
+    val webServer = ConfigWebServer(config.webGuiPort, configPath, dhcpService)
     webServer.startServer()
 
     logger.info("Overlay:   http://localhost:{}/", config.overlayPort)
@@ -93,9 +106,23 @@ fun main(args: Array<String>) {
     }
     logger.info("波形取得方式: {}", waveformStyle)
 
+    if (config.virtualCdjDeviceNumber in 1..4) {
+        logger.info("VirtualCdjのプレイヤー番号を{}に固定します(実機CDJとの番号衝突回避)", config.virtualCdjDeviceNumber)
+    }
+
     Thread({
         logger.info("Receiver starting; waiting for Pro DJ Link devices...")
-        receiver.start(waveformStyle)
+        receiver.start(waveformStyle, config.virtualCdjDeviceNumber)
+        val opusArchives = config.opusArchives.mapNotNull { entry ->
+            val file = File(entry.path)
+            if (!file.exists()) {
+                logger.warn("設定されたメタデータアーカイブが見つかりません(slot={}): {}", entry.slot, file)
+                null
+            } else {
+                entry.slot to file
+            }
+        }.toMap()
+        receiver.attachOpusArchives(opusArchives)
     }, "Receiver Startup").apply { isDaemon = true }.start()
 
     val scheduler = Executors.newSingleThreadScheduledExecutor()
@@ -103,6 +130,7 @@ fun main(args: Array<String>) {
         try {
             (1..4).mapNotNull { receiver.pollDeck(it) }.forEach {
                 sender.update(it)
+                streamMixSender.update(it)
                 overlay.update(it)
                 if (it.master) carabinerBridge.updateMasterTempo(it.bpm)
             }
@@ -111,11 +139,40 @@ fun main(args: Array<String>) {
         }
     }, 0, 100, TimeUnit.MILLISECONDS)
 
+    // 他のDHCPサーバーの有無を定期的にプローブし、Pro DJ Link用DHCPサーバー(dnsmasq)を自動でON/OFFする
+    // (config.dhcpAutoModeがtrueの場合のみ。他の設定同様、この値自体は起動時に読み込んだものを使い、
+    // 保存後の反映にはプロセス再起動が必要という方針に合わせている)。
+    val dhcpScheduler = Executors.newSingleThreadScheduledExecutor()
+    if (config.dhcpAutoMode) {
+        logger.info("DHCP自動切り替えが有効です(約1分間隔で他のDHCPサーバーの有無をチェックします)")
+        dhcpScheduler.scheduleAtFixedRate({
+            try {
+                val foreign = dhcpService.probeForeignDhcp()
+                val active = dhcpService.isActive()
+                if (foreign == null || active == null) {
+                    logger.warn("DHCP自動切り替え: 状態の取得に失敗したため、今回はスキップします")
+                    return@scheduleAtFixedRate
+                }
+                if (foreign && active) {
+                    logger.info("DHCP自動切り替え: 他のDHCPサーバーを検知したため、DHCPサーバーを無効化します")
+                    dhcpService.setEnabled(false)
+                } else if (!foreign && !active) {
+                    logger.info("DHCP自動切り替え: 他のDHCPサーバーが見当たらないため、DHCPサーバーを有効化します")
+                    dhcpService.setEnabled(true)
+                }
+            } catch (e: Exception) {
+                logger.warn("DHCP自動切り替えのチェック中にエラーが発生しました", e)
+            }
+        }, 10, 60, TimeUnit.SECONDS)
+    }
+
     Runtime.getRuntime().addShutdownHook(Thread {
         logger.info("shutting down...")
         scheduler.shutdownNow()
+        dhcpScheduler.shutdownNow()
         receiver.stop()
         sender.close()
+        streamMixSender.close()
         overlay.stopServer()
         webServer.stopServer()
         carabinerBridge.stop()

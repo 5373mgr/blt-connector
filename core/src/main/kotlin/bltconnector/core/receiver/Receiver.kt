@@ -4,11 +4,15 @@ import org.deepsymmetry.beatlink.CdjStatus
 import org.deepsymmetry.beatlink.DeviceFinder
 import org.deepsymmetry.beatlink.VirtualCdj
 import org.deepsymmetry.beatlink.data.ArtFinder
+import org.deepsymmetry.beatlink.data.DataReference
 import org.deepsymmetry.beatlink.data.MetadataFinder
+import org.deepsymmetry.beatlink.data.OpusProvider
+import org.deepsymmetry.beatlink.Util
 import org.deepsymmetry.beatlink.data.TimeFinder
 import org.deepsymmetry.beatlink.data.WaveformDetail
 import org.deepsymmetry.beatlink.data.WaveformFinder
 import org.slf4j.LoggerFactory
+import java.io.File
 
 /**
  * ホットキュー/メモリーキュー1件分(beat-linkの`CueList.Entry`から変換)。
@@ -68,6 +72,30 @@ data class DeckSnapshot(
      * Nexus系ミキサーのみ対応(beat-linkの`CdjStatus.isOnAir()`)。
      */
     val onAir: Boolean = false,
+    /** Sync(Master追従)が有効か(beat-linkの`CdjStatus.isSynced()`)。 */
+    val synced: Boolean = false,
+    /** トラック先頭からの絶対ビート番号(beat-linkの`CdjStatus.getBeatNumber()`)。 */
+    val beatNumber: Int = 0,
+    /** 小節内のビート位置1〜4(beat-linkの`CdjStatus.getBeatWithinBar()`)。 */
+    val beatWithinBar: Int = 0,
+    /** ピッチフェーダーの倍率(1.0が等速、`Util.pitchToMultiplier()`)。 */
+    val pitchMultiplier: Double = 1.0,
+    val genre: String? = null,
+    val key: String? = null,
+    val label: String? = null,
+    val originalArtist: String? = null,
+    val remixer: String? = null,
+    /** rekordboxの色ラベル名(例: "Red")。beat-linkの`ColorItem.colorName`。 */
+    val colorName: String? = null,
+    val dateAdded: String? = null,
+    val bitRate: Int? = null,
+    val rating: Int? = null,
+    val year: Int? = null,
+    val artworkId: Int? = null,
+    /** 原曲のテンポメタデータ(BPM×100の生値、beat-linkの`TrackMetadata.getTempo()`)。 */
+    val tempoMetaRaw: Int? = null,
+    /** `TrackMetadata`オブジェクト全体の文字列ダンプ(デバッグ用配信向け)。 */
+    val metadataRawDump: String? = null,
 )
 
 /**
@@ -98,13 +126,37 @@ class Receiver {
      *
      * [waveformStyle] は色波形(RGB)か3Band波形かを指定する。beat-link側の制約でアプリ全体に
      * つき1つしか同時に扱えない。
+     *
+     * [preferredDeviceNumber] を1〜6に指定すると、VirtualCdjがその番号を明示的に要求する
+     * (`VirtualCdj.setDeviceNumber()`)。0(既定)なら従来通りbeat-link側の自動選択(起動時に
+     * 見えているデバイスを4秒間観察し、1〜4のうち空いている最小の番号を選ぶ。全て使用中なら
+     * 5番以降へフォールバックするが、5番以降はdbserverのメタデータ問い合わせ対象外になる)に任せる。
+     *
+     * 自動選択は「起動時点でまだ電源が入っていない実機CDJ」の番号と後から衝突しうる
+     * (実機で確認: Receiverが起動直後に空き番号だった1番を自己割り当てした後、deck1に固定設定された
+     * 実機CDJが電源投入され同じ1番を要求し続け、`Sending device number defense packet to invader`が
+     * 無限に繰り返されてそのCDJがPro DJ Linkに安定して参加できなくなった)。実機CDJの台数より
+     * 大きい番号を[preferredDeviceNumber]に指定することで回避できる。
+     *
+     * 5・6番はbeat-link自身の自動選択では(実機の5・6番目のプレイヤーとの衝突を避けるため)
+     * あえて避けているが、CDJ-3000世代のネットワーク(1台のPro DJ Linkに最大6台のプレイヤーを
+     * 収容できる)では5・6番も「本物のプレイヤー」扱いになり、dbserverのメタデータ問い合わせに
+     * 応答することを実機で確認済み。実機CDJが4台(1〜4番)ある場合は5か6を指定すれば
+     * メタデータ取得を維持できる(ただし全てCDJ-3000世代であることが前提。Nexus等の旧世代機器が
+     * 混在する場合は5・6番が使えるとは限らない)。
      */
-    fun start(waveformStyle: WaveformFinder.WaveformStyle = WaveformFinder.WaveformStyle.RGB) {
+    fun start(
+        waveformStyle: WaveformFinder.WaveformStyle = WaveformFinder.WaveformStyle.RGB,
+        preferredDeviceNumber: Int = 0,
+    ) {
         shouldRun = true
         // MetadataFinderがdbserver経由でタイトル/アーティスト/波形/ジャケットを問い合わせるには、
         // VirtualCdjが1〜4番のプレイヤー番号を借用できる必要がある(実機CDJで確認済み。
         // これがfalseのままだと自己割り当て番号が7以上になり、メタデータ問い合わせが永久に失敗する)。
         virtualCdj.setUseStandardPlayerNumber(true)
+        if (preferredDeviceNumber in 1..6) {
+            virtualCdj.deviceNumber = preferredDeviceNumber.toByte()
+        }
         while (shouldRun) {
             try {
                 deviceFinder.start()
@@ -130,6 +182,31 @@ class Receiver {
         artFinder.start()
         started = true
         logger.info("Receiver started.")
+    }
+
+    /**
+     * OPUS-QUAD利用時、事前に(Beat Link Trigger等で)作成済みのメタデータアーカイブをUSBスロットへ
+     * 紐付ける。アーカイブの生成自体はこのプロジェクトでは行わない(BLTの「File > Archive Metadata」で
+     * 作成したファイルをそのまま指定する想定)。CDJ等、Opus Quad互換モードでない場合は何もしない
+     * (呼んでも無害)。`start()`が完了し、Pro DJ Linkデバイスが見つかった後に呼ぶこと。
+     *
+     * [archives] はUSBスロット番号→アーカイブファイルのマップ。beat-linkの`OpusProvider`の制約により
+     * 有効なスロット番号は1〜3(プレイヤー番号ではなく物理USBスロット番号)。
+     */
+    fun attachOpusArchives(archives: Map<Int, File>) {
+        if (archives.isEmpty()) return
+        if (!virtualCdj.inOpusQuadCompatibilityMode()) {
+            logger.info("OPUS-QUAD互換モードではないため、メタデータアーカイブ設定は無視します")
+            return
+        }
+        archives.forEach { (slot, file) ->
+            try {
+                OpusProvider.getInstance().attachMetadataArchive(file, slot)
+                logger.info("OPUS-QUADのUSBスロット{}にメタデータアーカイブを紐付けました: {}", slot, file)
+            } catch (e: Exception) {
+                logger.warn("OPUS-QUADのUSBスロット{}へのメタデータアーカイブ紐付けに失敗しました: {}", slot, file, e)
+            }
+        }
     }
 
     fun stop() {
@@ -159,14 +236,27 @@ class Receiver {
         val waveform = waveformFinder.getLatestPreviewFor(playerNumber)
         val waveformDetail = waveformFinder.getLatestDetailFor(playerNumber)
         val art = artFinder.getLatestArtFor(playerNumber)
+        // 曲の同一性判定には`metadata?.trackReference`(dbserver問い合わせ成功時のみ非null)ではなく、
+        // CdjStatusの生フィールド(rekordboxId等、メタデータ取得の成否に関係なく常に得られる)から
+        // 直接組み立てる。dbserverのメタデータ問い合わせが特定の曲で失敗し続けると(実機CDJ-3000で
+        // 確認済み、原因は曲ごとのライブラリデータ側の問題と見られる)、`metadata`が恒久的にnullになり、
+        // 「メタデータなしの曲A」と「メタデータなしの曲B」の区別がつかず、以後その曲が何度切り替わっても
+        // 曲変化そのものを検知できなくなる(波形/ジャケットの再取得トリガーやOverlayのtrackVersionが
+        // 固まったままになる)不具合があったため。
+        val trackKey = status.rekordboxId.takeIf { it != 0 }
+            ?.let { DataReference(status.trackSourcePlayer, status.trackSourceSlot, it, status.trackType) }
 
         return DeckSnapshot(
             playerNumber = playerNumber,
             positionMs = positionMs.takeIf { it >= 0 },
             playing = status.isPlaying,
-            bpm = status.effectiveTempo,
+            // トラック未ロード時、beat-linkの生bpmフィールドはPro DJ Linkプロトコル上の無効値センチネル
+            // 0xFFFF(65535)になる。CdjStatus.getEffectiveTempo()はこれをそのままピッチ倍したdouble値を
+            // 返す(655.35付近)ため、ここでガードしないと未ロードデッキの見た目のBPMとして流れてしまう
+            // (実機のOPUS-QUADで確認済み)。
+            bpm = if (status.bpm == 0xFFFF) 0.0 else status.effectiveTempo,
             master = status.isTempoMaster,
-            trackKey = metadata?.trackReference,
+            trackKey = trackKey,
             title = metadata?.title,
             artist = metadata?.artist?.label,
             album = metadata?.album?.label,
@@ -196,6 +286,23 @@ class Receiver {
             },
             comment = metadata?.comment,
             onAir = status.isOnAir,
+            synced = status.isSynced,
+            beatNumber = status.beatNumber,
+            beatWithinBar = status.beatWithinBar,
+            pitchMultiplier = Util.pitchToMultiplier(status.pitch.toLong()),
+            genre = metadata?.genre?.label,
+            key = metadata?.key?.label,
+            label = metadata?.label?.label,
+            originalArtist = metadata?.originalArtist?.label,
+            remixer = metadata?.remixer?.label,
+            colorName = metadata?.color?.colorName,
+            dateAdded = metadata?.dateAdded,
+            bitRate = metadata?.bitRate,
+            rating = metadata?.rating,
+            year = metadata?.year,
+            artworkId = metadata?.artworkId,
+            tempoMetaRaw = metadata?.tempo,
+            metadataRawDump = metadata?.toString(),
         )
     }
 }

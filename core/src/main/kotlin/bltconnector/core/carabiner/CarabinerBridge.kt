@@ -130,6 +130,7 @@ class CarabinerBridge(private val port: Int = 17000) {
     @Volatile private var socket: Socket? = null
     @Volatile private var writer: OutputStreamWriter? = null
     @Volatile private var lastSentBpm: Double? = null
+    @Volatile private var lastSentAtNanos: Long = 0L
     @Volatile private var running = false
 
     /** Carabinerから最後に受け取った status メッセージの内容(peers/bpm/beat等)。UIでの参考表示用。 */
@@ -211,19 +212,36 @@ class CarabinerBridge(private val port: Int = 17000) {
     /**
      * Masterデッキの実効BPMをCarabiner(Link)へ反映する。ほぼ同じ値の連続送信は間引く。
      * まだCarabinerに接続できていない場合は無視する(接続完了後の次回呼び出しで反映される)。
+     *
+     * [MIN_SEND_INTERVAL_NANOS]で送信間隔にも下限を設けている。これはCarabinerバイナリの
+     * バグ対策で、実機(Raspberry Pi)でgdbによりクラッシュを再現・解析したところ、
+     * `bpm`コマンドを高頻度に送り続けるとAbleton Link本体が内蔵するAsio(1.28.0)の
+     * `epoll_reactor`/`scheduler`内部(TCPコマンド処理スレッドとは別の"Link Main"スレッド)で
+     * セグメンテーション違反を起こすことを確認した(10Hzで送り続けると約1秒で再現)。
+     * バンドルされたサードパーティC++依存の内部バグでこちら側からは直接修正できないため、
+     * 送信頻度そのものを下げてこのバグを踏む確率を下げる。クラッシュ自体は
+     * [RpiCarabinerProcess]のsupervisorが自動復旧するので、間引かれた値は次回呼び出しで
+     * 改めて評価される(値が失われるわけではない)。
      */
     @Synchronized
     fun updateMasterTempo(bpm: Double) {
         val w = writer ?: return
         val last = lastSentBpm
         if (last != null && Math.abs(last - bpm) < 0.05) return
+        val now = System.nanoTime()
+        if (now - lastSentAtNanos < MIN_SEND_INTERVAL_NANOS) return
         try {
             w.write("bpm ${"%.4f".format(bpm)}\n")
             w.flush()
             lastSentBpm = bpm
+            lastSentAtNanos = now
         } catch (e: IOException) {
             logger.warn("Carabinerへのbpm送信に失敗しました", e)
         }
+    }
+
+    companion object {
+        private val MIN_SEND_INTERVAL_NANOS = java.time.Duration.ofMillis(300).toNanos()
     }
 
     fun stop() {

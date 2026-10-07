@@ -17,10 +17,16 @@ data class Destination(val name: String, val address: InetAddress, val port: Int
 /**
  * デッキ状態をOSCメッセージとして各Destinationへユニキャスト配信する。
  *
- * 帯域配慮のため2段階に分ける(docs/architecture.md参照):
+ * 帯域配慮のため3段階に分ける(docs/architecture.md参照):
  *  - 毎tick: 再生位置・再生中フラグ・実効BPM・Masterフラグ(軽量なので常時送信)
- *  - 曲が変わった時のみ: タイトル・アーティスト・アルバム・原曲BPM・波形プレビュー
- * 宛先ごとに最後に送った trackKey を記憶し、差分があれば(新規追加した宛先も含めて)曲情報を送り直す。
+ *  - 1秒に1回チェックし、変化があった時だけ: タイトル・アーティスト・アルバム・曲長・原曲BPM
+ *  - 曲が変わった時(trackKey変化)のみ: 波形プレビュー(帯域が大きいため、こちらは従来通り
+ *    曲が変わった瞬間だけ送る。1秒毎の再評価はしない)
+ *
+ * タイトル等を「曲が変わった瞬間だけ」送る設計だった頃は、その瞬間にdbserverへのメタデータ
+ * 問い合わせがまだ完了していないと(非同期なので起こり得る)、曲名が空のまま二度と更新されない
+ * 不具合があった。1秒間隔で値を再評価し、前回送った値と異なる場合だけ送り直す方式に変更することで、
+ * 値が確定した時点で自然に追いつくようにしている(無関係な変化が無い限り送信しないので帯域も抑えられる)。
  *
  * [localBindAddress] を指定すると、送信元NICを固定できる(Sender単体をLinux CLIとして動かし、
  * 受信用/送信用インターフェースを分けたい場合に使う。未指定時はOSのルーティングに任せる)。
@@ -29,6 +35,25 @@ class Sender(private val localBindAddress: InetAddress? = null) {
     private val logger = LoggerFactory.getLogger(Sender::class.java)
     private val ports = mutableMapOf<Destination, OSCPortOut>()
     private val lastTrackKeySent = mutableMapOf<Pair<Destination, Int>, Any?>()
+    private val lastTrackInfoSent = mutableMapOf<Pair<Destination, Int>, TrackInfo>()
+    private val lastTrackInfoCheckNanos = mutableMapOf<Pair<Destination, Int>, Long>()
+
+    /** OSCで送るテキスト系メタデータの比較用スナップショット(波形は含まない、別経路で扱う)。 */
+    private data class TrackInfo(
+        val title: String,
+        val artist: String,
+        val album: String,
+        val durationMs: Long,
+        val originalBpm: Float,
+    )
+
+    private fun trackInfoOf(deck: DeckSnapshot) = TrackInfo(
+        title = deck.title ?: "",
+        artist = deck.artist ?: "",
+        album = deck.album ?: "",
+        durationMs = deck.durationMs ?: -1L,
+        originalBpm = (deck.originalBpm ?: -1.0).toFloat(),
+    )
 
     fun addDestination(destination: Destination) {
         if (ports.containsKey(destination)) return
@@ -43,11 +68,13 @@ class Sender(private val localBindAddress: InetAddress? = null) {
     fun removeDestination(destination: Destination) {
         ports.remove(destination)?.close()
         lastTrackKeySent.keys.removeAll { it.first == destination }
+        lastTrackInfoSent.keys.removeAll { it.first == destination }
+        lastTrackInfoCheckNanos.keys.removeAll { it.first == destination }
     }
 
     fun destinations(): Set<Destination> = ports.keys.toSet()
 
-    /** デッキ1台分の最新状態を全宛先に配信する。曲が変わっていれば曲情報も併せて送る。 */
+    /** デッキ1台分の最新状態を全宛先に配信する。曲が変わっていれば波形を、メタデータに変化があれば曲情報を併せて送る。 */
     fun update(deck: DeckSnapshot) {
         val base = "/blt/deck/${deck.playerNumber}"
         val tickMessages = listOf(
@@ -60,25 +87,47 @@ class Sender(private val localBindAddress: InetAddress? = null) {
         ports.forEach { (destination, port) ->
             val key = destination to deck.playerNumber
             val trackChanged = lastTrackKeySent[key] != deck.trackKey
-            val messages = if (trackChanged) tickMessages + trackInfoMessages(base, deck) else tickMessages
+            val messages = mutableListOf<OSCMessage>().apply { addAll(tickMessages) }
+
+            if (trackChanged) {
+                lastTrackKeySent[key] = deck.trackKey
+                messages.addAll(waveformMessages(base, deck))
+                // 曲が変わったので、テキスト系メタデータも次のチェックで必ず再評価させる
+                // (前の曲の値と偶然同じでも、少なくとも1回は送るようにするため)。
+                lastTrackInfoSent.remove(key)
+                lastTrackInfoCheckNanos.remove(key)
+            }
+
+            val now = System.nanoTime()
+            val lastCheck = lastTrackInfoCheckNanos[key]
+            val shouldCheckTrackInfo = lastCheck == null || (now - lastCheck) >= TRACK_INFO_CHECK_INTERVAL_NANOS
+            if (shouldCheckTrackInfo) {
+                lastTrackInfoCheckNanos[key] = now
+                val info = trackInfoOf(deck)
+                if (lastTrackInfoSent[key] != info) {
+                    lastTrackInfoSent[key] = info
+                    messages.addAll(trackInfoMessages(base, info))
+                }
+            }
+
             try {
                 messages.forEach { port.send(it) }
-                if (trackChanged) lastTrackKeySent[key] = deck.trackKey
             } catch (e: Exception) {
                 logger.warn("failed to send OSC to {}", destination, e)
             }
         }
     }
 
-    private fun trackInfoMessages(base: String, deck: DeckSnapshot): List<OSCMessage> {
-        val messages = mutableListOf(
-            OSCMessage("$base/title", listOf(deck.title ?: "")),
-            OSCMessage("$base/artist", listOf(deck.artist ?: "")),
-            OSCMessage("$base/album", listOf(deck.album ?: "")),
-            OSCMessage("$base/duration_ms", listOf(deck.durationMs ?: -1L)),
-            OSCMessage("$base/original_bpm", listOf((deck.originalBpm ?: -1.0).toFloat())),
-            OSCMessage("$base/waveform_color", listOf(deck.waveformColor)),
-        )
+    private fun trackInfoMessages(base: String, info: TrackInfo): List<OSCMessage> = listOf(
+        OSCMessage("$base/title", listOf(info.title)),
+        OSCMessage("$base/artist", listOf(info.artist)),
+        OSCMessage("$base/album", listOf(info.album)),
+        OSCMessage("$base/duration_ms", listOf(info.durationMs)),
+        OSCMessage("$base/original_bpm", listOf(info.originalBpm)),
+    )
+
+    private fun waveformMessages(base: String, deck: DeckSnapshot): List<OSCMessage> {
+        val messages = mutableListOf(OSCMessage("$base/waveform_color", listOf(deck.waveformColor)))
         deck.waveform?.let { messages.add(OSCMessage("$base/waveform", listOf(it))) }
         return messages
     }
@@ -87,5 +136,11 @@ class Sender(private val localBindAddress: InetAddress? = null) {
         ports.values.forEach { it.close() }
         ports.clear()
         lastTrackKeySent.clear()
+        lastTrackInfoSent.clear()
+        lastTrackInfoCheckNanos.clear()
+    }
+
+    companion object {
+        private val TRACK_INFO_CHECK_INTERVAL_NANOS = java.time.Duration.ofSeconds(1).toNanos()
     }
 }
