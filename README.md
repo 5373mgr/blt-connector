@@ -8,6 +8,9 @@ Pro DJ Link上にBeat Link Trigger (BLT) を2台以上立てると既存のリ�
 以前検討していたDocker/Raspberry Pi/Linuxベースの設計は破棄した。参照用に
 [docs/archive/old-docker-pi-design/](docs/archive/old-docker-pi-design/) に残している。
 
+実機(CDJ/ミキサー/Raspberry Pi)を使ったテスト手順・SSH接続情報・デプロイ手順は
+[docs/testing.md](docs/testing.md) を参照。
+
 ## 構成
 
 Gradle(Kotlin DSL)のマルチモジュール構成。2つの配布形態(GUI版/CLI版)は
@@ -21,21 +24,24 @@ Gradle(Kotlin DSL)のマルチモジュール構成。2つの配布形態(GUI版
 ## 現状のステータス
 
 - [x] プロジェクト雛形(Gradle + Kotlin + JavaFX + beat-link、core/gui/cliマルチモジュール)
-- [x] Receiver: beat-linkでのデバイス検出・メタデータ取得(`core/src/main/kotlin/bltconnector/core/receiver/Receiver.kt`)。タイトル/アーティスト/アルバム/再生位置/実効BPM/Masterフラグ/波形プレビュー/ジャケット取得済み。**実機のCDJでの動作確認は未**
-- [x] Sender: OSC送信の実装(`core/src/main/kotlin/bltconnector/core/sender/Sender.kt`)。曲が変わった時だけ曲情報/波形を再送する2段階配信、単体テストあり。宛先は手動追加のみ、mDNS等の自動検出は未実装
+- [x] Receiver: beat-linkでのデバイス検出・メタデータ取得(`core/src/main/kotlin/bltconnector/core/receiver/Receiver.kt`)。タイトル/アーティスト/アルバム/再生位置/実効BPM/Masterフラグ/波形プレビュー/ジャケット取得済み。**実機CDJ-3000/CDJ-2000NXS2/DJM-A9/DJM-900NXS2で動作確認済み**(見つかった不具合と対処は[docs/testing.md](docs/testing.md)参照)
+- [x] Sender: OSC送信の実装(`core/src/main/kotlin/bltconnector/core/sender/Sender.kt`)。曲情報(title/artist等)は1秒間隔で差分検知して変化時のみ再送(dbserverのメタデータ応答遅延に対応)、波形プレビューは曲が変わった時のみ送信、単体テストあり。宛先は手動追加のみ、mDNS等の自動検出は未実装
+- [x] StreamMixSender: 外部ソフト「StreamMix Display」互換のOSCスキーマ(`/deck/{n}/...`)での配信にも対応([docs/BTL_OSC_Documentation.md](docs/BTL_OSC_Documentation.md)参照)。既存のSenderと併用可能
 - [x] OSCメッセージスキーマ確定([docs/architecture.md](docs/architecture.md)参照)
 - [x] GUI(JavaFX): Receiver開始 + 宛先追加/削除 + 状態ログ表示(最小限)
-- [x] Overlay: ジャケット取得(ArtFinder)+ ローカルHTTP/WebSocketサーバー + OBS向けHTML/CSS/JS(`http://localhost:8090/`をOBSのBrowser Sourceに指定)。**実機CDJでの見た目確認は未**
+- [x] Overlay: ジャケット取得(ArtFinder)+ ローカルHTTP/WebSocketサーバー + OBS向けHTML/CSS/JS(`http://localhost:8090/`をOBSのBrowser Sourceに指定)。VJ向け`/monitor`は実機BLT本体のPlayer Statusウィンドウに寄せたデザイン。**実機CDJでの見た目確認済み**
 - [x] Carabiner連携によるMaster BPMブリッジ(`core/src/main/kotlin/bltconnector/core/carabiner/CarabinerBridge.kt`)。
       `org.deepsymmetry:lib-carabiner`がWin/Mac/Linux向けバイナリを同梱・自動起動してくれるので自前でのバイナリ準備は不要。
-      実際にバイナリを起動して`bpm`送信→Ableton Linkのテンポ変化を確認する単体テストあり(CDJ不要で検証可能)
+      実機Raspberry Pi(32bit ARM)でのネイティブバイナリクラッシュ対策として送信間隔のスロットルあり(既知の制約、[docs/testing.md](docs/testing.md)参照)
 - [x] CLI版(`cli/`): Receiver + Sender + Overlayをそのまま束ねたLinux向けCLI + 組み込みWeb GUI。
-      ローカルで起動確認済み。実装中にCDJ未接続時の実挙動から2つの不具合を発見・修正
-      (詳細は[docs/architecture.md](docs/architecture.md)の「CLI版」節を参照)
+      実機Raspberry Piにsystemdサービスとして常時デプロイして動作確認済み
+      (デプロイ手順は[docs/testing.md](docs/testing.md)参照)
+- [x] Pro DJ Link用DHCPサーバー(dnsmasq)のWeb UIからの手動ON/OFFと、他のDHCPサーバー検知による自動切り替え(`cli/src/main/kotlin/bltconnector/cli/DhcpService.kt`)
+- [x] OPUS-QUAD利用時のメタデータアーカイブ紐付け(`Receiver.attachOpusArchives`)
 - [ ] Sender: mDNS等による宛先自動検出
 - [ ] GUI/CLIでのCarabiner/Overlay状態表示の充実
 - [ ] Win/Mac向けjpackageパッケージング
-- [ ] 明日、実機(CDJ-3000 + DJM-A9、Raspberry Pi)での動作確認・不具合修正
+- [ ] onAir(チャンネルオンエア状態)がミキサー機種・配線によっては実際の状態と一致しない問題の根本対処
 
 ## 既知の環境固有の問題
 

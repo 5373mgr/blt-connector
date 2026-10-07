@@ -2,15 +2,16 @@ package bltconnector.core.receiver
 
 import org.deepsymmetry.beatlink.CdjStatus
 import org.deepsymmetry.beatlink.DeviceFinder
+import org.deepsymmetry.beatlink.Util
 import org.deepsymmetry.beatlink.VirtualCdj
 import org.deepsymmetry.beatlink.data.ArtFinder
 import org.deepsymmetry.beatlink.data.DataReference
 import org.deepsymmetry.beatlink.data.MetadataFinder
 import org.deepsymmetry.beatlink.data.OpusProvider
-import org.deepsymmetry.beatlink.Util
 import org.deepsymmetry.beatlink.data.TimeFinder
 import org.deepsymmetry.beatlink.data.WaveformDetail
 import org.deepsymmetry.beatlink.data.WaveformFinder
+import org.deepsymmetry.beatlink.dbserver.ConnectionManager
 import org.slf4j.LoggerFactory
 import java.io.File
 
@@ -182,6 +183,44 @@ class Receiver {
         artFinder.start()
         started = true
         logger.info("Receiver started.")
+        startDbServerPortWatchdog(waveformStyle, preferredDeviceNumber)
+    }
+
+    /**
+     * beat-link側の既知の不具合への対策: `ConnectionManager`は各プレイヤーのdbserverポート番号を
+     * IPアドレスをキーにキャッシュするが、問い合わせ結果がPro DJ Linkプロトコル上の無効値センチネル
+     * `0xFFFF`(65535)だった場合もそのまま検証なしでキャッシュしてしまい、かつこのキャッシュを
+     * 外部から選択的に無効化・再取得させる公開APIが存在しない(実機で確認済み: deck2のCDJを
+     * 再起動した際、再起動直後でdbserverがまだ起動しきっていないタイミングで問い合わせが行われ、
+     * 65535がキャッシュされたまま固定され、以後`Connection refused`が秒間10回以上の頻度で
+     * 永久に発生し続け、そのプレイヤーのメタデータ取得が完全に止まった)。
+     *
+     * `ConnectionManager`自体の再初期化(`stop()`→`start()`、`DeviceFinder`の再announceを経由)でしか
+     * このキャッシュは正しく作り直されないため、定期的に全プレイヤーのポート番号を監視し、
+     * 無効値を検出したらReceiver全体を再起動して復旧する。
+     */
+    private fun startDbServerPortWatchdog(waveformStyle: WaveformFinder.WaveformStyle, preferredDeviceNumber: Int) {
+        Thread({
+            while (shouldRun) {
+                Thread.sleep(DB_SERVER_PORT_WATCHDOG_INTERVAL_MS)
+                if (!shouldRun || !started) continue
+                val poisonedPlayer = (1..6).firstOrNull { player ->
+                    ConnectionManager.getInstance().getPlayerDBServerPort(player) == INVALID_DB_SERVER_PORT
+                }
+                if (poisonedPlayer != null) {
+                    logger.warn(
+                        "プレイヤー{}のdbserverポート番号が無効値(65535)のままキャッシュされているため、" +
+                            "Receiverを再起動して復旧を試みます",
+                        poisonedPlayer,
+                    )
+                    stop()
+                    start(waveformStyle, preferredDeviceNumber)
+                    // start()が復旧後の新しいwatchdogスレッドを起動するため、このスレッドはここで終了する
+                    // (そのまま続けると再起動のたびにwatchdogスレッドが増え続けてしまう)。
+                    return@Thread
+                }
+            }
+        }, "Receiver DbServerPort Watchdog").apply { isDaemon = true }.start()
     }
 
     /**
@@ -304,5 +343,12 @@ class Receiver {
             tempoMetaRaw = metadata?.tempo,
             metadataRawDump = metadata?.toString(),
         )
+    }
+
+    companion object {
+        private const val DB_SERVER_PORT_WATCHDOG_INTERVAL_MS = 5000L
+
+        /** Pro DJ Linkプロトコル上の「値未確定」を示すセンチネル値。dbserverポート番号としては無効。 */
+        private const val INVALID_DB_SERVER_PORT = 0xFFFF
     }
 }
