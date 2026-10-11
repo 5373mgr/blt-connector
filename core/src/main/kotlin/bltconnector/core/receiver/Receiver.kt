@@ -173,6 +173,10 @@ class Receiver {
         }
         if (!shouldRun) return
 
+        // OPUS-QUAD/XDJ-AZ互換(rekordboxプロキシ)モードではdbserverへ問い合わせできないため、
+        // パッシブモードにして失敗が確定している問い合わせ(とそのエラーログの大量出力)を止める。
+        // メタデータアーカイブ(OpusProvider)からの取得はパッシブモードでも先に行われるので影響しない。
+        metadataFinder.isPassive = virtualCdj.inOpusQuadCompatibilityMode()
         metadataFinder.start()
         timeFinder.start()
         waveformFinder.setPreferredStyle(waveformStyle)
@@ -210,6 +214,9 @@ class Receiver {
             while (shouldRun) {
                 Thread.sleep(DB_SERVER_PORT_WATCHDOG_INTERVAL_MS)
                 if (!shouldRun || !started) continue
+                // OPUS-QUAD/XDJ-AZ互換(rekordboxプロキシ)モードではdbserverを使わず、メタデータが
+                // nullなのも正常(アーカイブ未設定時)なため、どちらの監視も誤検知にしかならない
+                if (virtualCdj.inOpusQuadCompatibilityMode()) continue
 
                 val poisonedPlayer = (1..6).firstOrNull { player ->
                     ConnectionManager.getInstance().getPlayerDBServerPort(player) == INVALID_DB_SERVER_PORT

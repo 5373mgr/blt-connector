@@ -35,6 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # beat-linkのフォーク(third_party/beat-link)
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -47,6 +49,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # beat-linkのフォーク(third_party/beat-link)
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -70,6 +74,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true  # beat-linkのフォーク(third_party/beat-link)
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

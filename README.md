@@ -38,6 +38,9 @@ Gradle(Kotlin DSL)のマルチモジュール構成。2つの配布形態(GUI版
       (デプロイ手順は[docs/testing.md](docs/testing.md)参照)
 - [x] Pro DJ Link用DHCPサーバー(dnsmasq)のWeb UIからの手動ON/OFFと、他のDHCPサーバー検知による自動切り替え(`cli/src/main/kotlin/bltconnector/cli/DhcpService.kt`)
 - [x] OPUS-QUAD利用時のメタデータアーカイブ紐付け(`Receiver.attachOpusArchives`)
+- [x] XDJ-AZ対応(部分的): beat-linkのフォーク([third_party/beat-link](third_party/beat-link)、サブモジュール)で
+      rekordboxプロキシモードを使い、全4デッキのBPM/再生状態/Master/Sync/拍位置を取得。曲名等のメタデータは未対応
+      (詳細は[docs/testing.md](docs/testing.md)の「beat-linkのフォーク」参照)
 - [ ] Sender: mDNS等による宛先自動検出
 - [ ] GUI/CLIでのCarabiner/Overlay状態表示の充実
 - [ ] Win/Mac向けjpackageパッケージング
@@ -51,7 +54,10 @@ Gradle(Kotlin DSL)のマルチモジュール構成。2つの配布形態(GUI版
 
 ## 開発
 
+beat-linkはフォークをgitサブモジュールとしてソースからビルドしているため、クローン時はサブモジュールも取得すること。
+
 ```bash
+git clone --recursive <このリポジトリ>   # クローン済みなら: git submodule update --init
 ./gradlew build            # 全体ビルド・テスト
 ./gradlew :gui:run         # GUI版を起動
 ./gradlew :cli:run         # CLI版を起動(カレントディレクトリに blt-connector-cli.json を生成/参照)

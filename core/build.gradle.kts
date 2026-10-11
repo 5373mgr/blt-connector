@@ -6,7 +6,8 @@ plugins {
 dependencies {
     // Receiver.start()の引数やDeckSnapshotのフィールド(WaveformDetail等)にbeat-linkの型を
     // そのまま公開しているため、利用側(cli/gui)からも型解決できるようapi扱いにする。
-    api("org.deepsymmetry:beat-link:8.0.0")
+    // 本家8.0.0にXDJ-AZ対応を加えたフォーク(third_party/beat-link)をソースからビルドして使う。
+    api(project(":beat-link-fork"))
     implementation("com.illposed.osc:javaosc-core:0.9")
     implementation("org.slf4j:slf4j-simple:2.0.17")
     // OverlayServerがNanoWSDを継承しているため公開API扱い(api)にする。

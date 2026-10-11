@@ -1,0 +1,4 @@
+[submodule "third_party/beat-link"]
+	path = third_party/beat-link
+	url = https://github.com/5373mgr/beat-link.git
+	branch = xdj-az-rekordbox-mode

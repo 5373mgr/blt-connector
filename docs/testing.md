@@ -51,6 +51,10 @@ CLI版はホットリロードしないため、`core`/`cli`のコードを変�
 scp <build出力>/cli/install/cli/lib/core.jar blt-connector-pdl:~/blt-connector-run/cli/lib/core.jar
 # cli側(Main.kt/ConfigWebServer.kt等)を変更した場合はcli.jarも
 scp <build出力>/cli/install/cli/lib/cli.jar blt-connector-pdl:~/blt-connector-run/cli/lib/cli.jar
+# beat-linkのフォーク(third_party/beat-link)を変更した場合はbeat-link-fork.jarも
+scp <build出力>/cli/install/cli/lib/beat-link-fork.jar blt-connector-pdl:~/blt-connector-run/cli/lib/beat-link-fork.jar
+# 依存ライブラリ自体を増減した場合は、bin/cli(起動スクリプトにCLASSPATHが直書きされている)と
+# lib/を丸ごと入れ替えること(jarだけ差し替えるとClassNotFoundになる)
 
 # 3. サービス再起動(sudoパスワードが必要)
 ssh blt-connector-pdl "sudo systemctl restart blt-connector.service"
@@ -133,3 +137,34 @@ Windows + 日本語パス環境でのGradle Testワーカーの既知の問題�
 - **onAir(チャンネルオンエア状態)の信頼性**: beat-linkの`CdjStatus.isOnAir()`はミキサー機種・
   配線によっては実際のフェーダー状態と一致しないことを実機で確認している。構造的な制約の
   可能性があり、確実な対処法は未確立。
+
+## beat-linkのフォーク(XDJ-AZ対応)
+
+本家beat-link 8.0.0はXDJ-AZに対応していないため、フォーク
+([5373mgr/beat-link](https://github.com/5373mgr/beat-link)の`xdj-az-rekordbox-mode`ブランチ)を
+`third_party/beat-link`にサブモジュールとして置き、`beat-link-fork`サブプロジェクトでソースから
+ビルドしている(本家のMavenビルドは使わない)。フォークを変更したら、フォーク側でコミット・プッシュした上で
+このリポジトリでサブモジュールの参照コミットを更新してコミットすること。
+
+XDJ-AZを実機でパケットキャプチャして分かったこと:
+
+- XDJ-AZは1〜4番(デッキ)と33番(ミキサー部)の5台分をannounceする。
+- 通常の仮想CDJ(beat-linkの標準動作)として参加すると、プレイヤー番号の割り当て自体は行われるが
+  CDJステータスパケットが一切届かない。さらにXDJ-AZが同じ番号を主張する0x06パケットをユニキャストしてくるため、
+  番号の防衛ループに陥る。デバイス名をCDJ-3000にしても、番号を変えても、自分からステータスを送っても同じだった
+  (本物のCDJ-3000との通信をキャプチャできれば手がかりになる可能性はある)。
+- rekordboxとして振る舞う(beat-linkのOPUS-QUAD用`VirtualRekordbox`)と、全4デッキの完全なCDJステータスと
+  0x56のメタデータパケットを送ってくる。フォークの変更は、デバイス名`XDJ-AZ`を見つけたらこのモードに入ることと、
+  そのモードで不要なプレイヤー番号防衛を行わないことだけ。
+
+このモードでの制約と対処:
+
+- 曲名/アーティスト/波形等のメタデータは取得できない(dbserverへ問い合わせできないため)。
+  BPM/再生状態/Master/Sync/拍位置は取得できる。XDJ-AZはport 33895でdbserverを持っており、
+  Device Library PlusのIDを使う(BLTの変更履歴より)ため、メタデータ対応はそこが手がかりになる。
+- [Receiver.kt](../core/src/main/kotlin/bltconnector/core/receiver/Receiver.kt)は互換モード
+  (`VirtualCdj.inOpusQuadCompatibilityMode()`)ではdbserver/メタデータ固着のwatchdogを止め、
+  `MetadataFinder`をパッシブモードにする(そうしないと「メタデータが取れない=異常」と判定して
+  Receiverを再起動し続け、失敗が確定している問い合わせのエラーログも大量に出る)。
+- PSSI解析時に`IllegalArgumentException: 12 > 0`が出ることがある(OPUS-QUADでも見られる本家側の挙動)。
+  ステータス取得には影響しない。
