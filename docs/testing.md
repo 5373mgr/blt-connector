@@ -159,9 +159,15 @@ XDJ-AZを実機でパケットキャプチャして分かったこと:
 
 このモードでの制約と対処:
 
-- 曲名/アーティスト/波形等のメタデータは取得できない(dbserverへ問い合わせできないため)。
-  BPM/再生状態/Master/Sync/拍位置は取得できる。XDJ-AZはport 33895でdbserverを持っており、
-  Device Library PlusのIDを使う(BLTの変更履歴より)ため、メタデータ対応はそこが手がかりになる。
+- BPM/再生状態/Master/Sync/拍位置は常に取得できる。
+- **PCのrekordboxからLAN経由で読み込んだ曲**は、XDJ-AZがステータス上で「rekordbox(17番)の
+  COLLECTION」由来と報告するため、rekordbox本体のdbserverに問い合わせて曲名・長さ・元BPM・キー・
+  波形(プレビュー/詳細)まで取得できる(実機確認済み)。本家beat-linkは互換モードで全デバイスへの
+  dbserverポート問い合わせを止めてしまうため、フォークでrekordboxだけは問い合わせるようにしている。
+- **XDJ-AZに挿したUSBメモリの曲**はメタデータを取得できない(XDJ-AZのdbserverへは問い合わせできないため)。
+  OPUS-QUADと同様にBLTで作ったメタデータアーカイブを紐付ければPSSI照合で取れる見込みだが未検証。
+  また、XDJ-AZはport 33895でdbserverを持っており、Device Library PlusのIDを使う(BLTの変更履歴より)ため、
+  直接問い合わせる方式を作るならそこが手がかりになる。
 - [Receiver.kt](../core/src/main/kotlin/bltconnector/core/receiver/Receiver.kt)は互換モード
   (`VirtualCdj.inOpusQuadCompatibilityMode()`)ではdbserver/メタデータ固着のwatchdogを止め、
   `MetadataFinder`をパッシブモードにする(そうしないと「メタデータが取れない=異常」と判定して
