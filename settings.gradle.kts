@@ -1,3 +1,3 @@
 rootProject.name = "blt-connector"
 
-include("core", "gui", "cli", "beat-link-fork")
+include("core", "gui", "cli", "ndi", "beat-link-fork")

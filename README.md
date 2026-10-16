@@ -44,6 +44,8 @@ Gradle(Kotlin DSL)のマルチモジュール構成。2つの配布形態(GUI版
       (詳細は[docs/testing.md](docs/testing.md)の「beat-linkのフォーク」参照)
 - [ ] Sender: mDNS等による宛先自動検出
 - [ ] GUI/CLIでのCarabiner/Overlay状態表示の充実
+- [x] NDI出力(`ndi/`、Windows): PiのOverlay(`/`)をJavaFX WebViewで描画し、アルファ付きNDIソース「BLT Overlay」として送出。
+      HTMLを読み込めないResolume等のVJソフト向け。1920x1080/30fpsでの送出・受信を実機確認済み(Mac対応は未)
 - [ ] Win/Mac向けjpackageパッケージング
 - [ ] onAir(チャンネルオンエア状態)がミキサー機種・配線によっては実際の状態と一致しない問題の根本対処
 
@@ -63,9 +65,35 @@ git clone --recursive <このリポジトリ>   # クローン済みなら: git 
 ./gradlew :gui:run         # GUI版を起動
 ./gradlew :cli:run         # CLI版を起動(カレントディレクトリに blt-connector-cli.json を生成/参照)
 ./gradlew :cli:installDist # CLI版の実行スクリプト一式を cli/build/install/cli/ に生成(Pi等への配布用)
+./gradlew :ndi:run         # OverlayをNDIで送出(Windows、要NDI Runtime/NDI Tools)
+./gradlew :ndi:checkNdi    # 送出中のNDIソースを受信して解像度・fpsを確認(動作確認用)
 ```
 
 JDK 21が必要(Gradle toolchainで自動解決を試みるが、ローカルにJDK 21が無い場合は別途用意すること)。
 
 CLI版の設定画面はデフォルトで `http://localhost:8081/`、Overlayは `http://localhost:8090/`。
 設定を保存したらプロセスを再起動して反映する(ホットリロードはしない)。
+
+## NDI出力(Windows)
+
+ResolumeなどHTMLを直接読み込めないVJソフト向けに、PiのOverlayをNDIソースとして送出する。
+実行PCに[NDI Tools](https://ndi.video/tools/)(NDI Runtime同梱)をインストールしておくこと。
+
+```bash
+./gradlew :ndi:run                                   # 既定: http://192.168.50.1:8090/ を「BLT Overlay」として送出
+./gradlew :ndi:run --args="--url=http://192.168.50.1:8090/monitor --name=BLT-Monitor --transparent=false --zoom=2"
+```
+
+`./gradlew :ndi:installDist` で生成される `ndi/bin/ndi.bat` を直接起動してもよい(引数は同じ)。
+起動するとプレビューウィンドウが開き、閉じると送出も止まる。主なオプション:
+
+| オプション | 既定値 | 説明 |
+|---|---|---|
+| `--url` | `http://192.168.50.1:8090/` | 描画するページ(VJ用モニター画面なら`/monitor`) |
+| `--name` | `BLT Overlay` | NDIソース名 |
+| `--width` / `--height` / `--fps` | `1920` / `1080` / `30` | 送出解像度・フレームレート |
+| `--transparent` | `true` | 背景を透過してアルファ付きで送出(Resolume側で映像に重ねられる) |
+| `--zoom` | `1.0` | ページの拡大率 |
+| `--preview-scale` | `0.5` | プレビューウィンドウの表示倍率(送出解像度には影響しない) |
+
+Piが起動していない・再起動中でもページの読み込みを5秒おきに再試行する。
