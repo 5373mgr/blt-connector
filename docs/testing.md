@@ -144,6 +144,9 @@ Windows + 日本語パス環境でのGradle Testワーカーの既知の問題�
   CDJ-3000だけの構成なら`Config.virtualCdjDeviceNumber`を5か6にすると、Receiverは各CDJ自身の番号を
   名乗って問い合わせるようになるため衝突しない。BLT本体(beat-link)を同時に動かしている場合も同様の
   問題が起きうるので、検証中はどちらか一方だけを動かすこと。
+  なお本家beat-linkは5・6番のとき問い合わせ先自身の番号を名乗るため、PCのrekordbox(17番)からLink Exportで
+  読み込んだ曲では「rekordbox自身」を名乗ることになり、setupメッセージにteardownが返って曲情報が取れなかった。
+  フォークでrekordbox(16番以上)宛てには自分の番号を名乗るよう修正済み。
 - **OSCの送信先**: CLI版のStreamMix Display配信先は初期設定で`broadcast:8000`(Pro DJ Link側NICの
   ブロードキャストアドレス、例: 192.168.50.255)。BLT本体の`BTL_OSC.blt`は`localhost:8000`に送る設定のため
   「同じMacでBLTを動かしていれば送信先指定なしで届く」が、Pi上のCLI版からはlocalhostでは届かない。
