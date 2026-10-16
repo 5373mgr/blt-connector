@@ -10,6 +10,7 @@ import javafx.scene.Group
 import javafx.scene.Scene
 import javafx.scene.SnapshotParameters
 import javafx.scene.image.PixelFormat
+import javafx.scene.input.KeyCode
 import javafx.scene.image.WritableImage
 import javafx.scene.paint.Color
 import javafx.scene.text.FontSmoothingType
@@ -22,6 +23,10 @@ import me.walkerknapp.devolay.DevolayFrameFourCCType
 import me.walkerknapp.devolay.DevolaySender
 import me.walkerknapp.devolay.DevolayVideoFrame
 import java.io.File
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.ByteBuffer
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -81,6 +86,8 @@ fun main(args: Array<String>) {
     Application.launch(NdiApp::class.java, *args)
 }
 
+private const val LAYOUT_POLL_INTERVAL_MS = 3000L
+
 class NdiApp : Application() {
     private lateinit var options: Options
     private lateinit var sender: DevolaySender
@@ -121,6 +128,7 @@ class NdiApp : Application() {
             }
         }
         engine.load(options.url)
+        startLayoutWatcher { engine.reload() }
 
         // 送出解像度のままではプレビューウィンドウが画面に収まらないため、表示だけ縮小する。
         // スナップショットはWebView自身(親のScaleの影響を受けない)から取るので送出解像度は変わらない。
@@ -131,6 +139,8 @@ class NdiApp : Application() {
             if (options.transparent) Color.web("#202020") else Color.BLACK)
         stage.title = "NDI: ${options.name} (${options.width}x${options.height} ${options.fps}fps) - ${options.url}"
         stage.setOnCloseRequest { stopAll() }
+        // F5で手動リロード(レイアウト以外、例えばフォントやPi側HTMLを差し替えた時用)
+        stage.scene.setOnKeyPressed { if (it.code == KeyCode.F5) engine.reload() }
         stage.show()
 
         val image = WritableImage(options.width, options.height)
@@ -163,6 +173,37 @@ class NdiApp : Application() {
         }.start()
 
         println("NDI送出を開始しました: \"${options.name}\" ${options.width}x${options.height} ${options.fps}fps <- ${options.url}")
+    }
+
+    /**
+     * Overlayのページはレイアウト設定(`/layout`)を読み込み時に一度だけ取得するため、エディタで
+     * レイアウトを変えても送出中の映像には反映されない。数秒おきに`/layout`を取得し、内容が
+     * 変わっていたらページを再読み込みする。
+     */
+    private fun startLayoutWatcher(reload: () -> Unit) {
+        val layoutUri = URI.create(options.url).resolve("/layout")
+        val client = HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(2)).build()
+        Thread({
+            var last: String? = null
+            while (running) {
+                try {
+                    val body = client.send(
+                        HttpRequest.newBuilder(layoutUri).timeout(java.time.Duration.ofSeconds(2)).build(),
+                        HttpResponse.BodyHandlers.ofString(),
+                    ).takeIf { it.statusCode() == 200 }?.body()
+                    if (body != null) {
+                        if (last != null && body != last) {
+                            println("レイアウトの変更を検知したため再読み込みします")
+                            Platform.runLater(reload)
+                        }
+                        last = body
+                    }
+                } catch (_: Exception) {
+                    // Piの再起動中など。次回再試行する
+                }
+                Thread.sleep(LAYOUT_POLL_INTERVAL_MS)
+            }
+        }, "Layout Watcher").apply { isDaemon = true }.start()
     }
 
     private fun sendLoop() {
