@@ -384,7 +384,14 @@ class Receiver {
             },
             waveformDetailColor = waveformDetail?.isColor ?: false,
             waveformDetailObject = waveformDetail,
-            artwork = art?.rawBytes?.let { buf ->
+            // 曲の切り替え直後はArtFinderにまだ前の曲のジャケットが残っていることがあり、Overlay側は
+            // 「未取得なら後から埋める」ため、そのまま渡すと前の曲のジャケットで固定されてしまう。
+            // 現在の曲のメタデータが示すアートワークと一致する場合だけ渡す。
+            artwork = art?.takeIf { a ->
+                metadata != null && trackKey != null && metadata.trackReference == trackKey &&
+                    a.artReference.rekordboxId == metadata.artworkId &&
+                    a.artReference.player == trackKey.player && a.artReference.slot == trackKey.slot
+            }?.rawBytes?.let { buf ->
                 ByteArray(buf.remaining()).also { buf.duplicate().get(it) }
             },
             cues = metadata?.cueList?.entries.orEmpty().map { entry ->

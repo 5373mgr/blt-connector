@@ -264,6 +264,11 @@ class ConfigWebServer(port: Int, private val configPath: String, private val dhc
                   デッキ状態を配信します。上の「OSC配信先」(独自スキーマ)とは別経路で、
                   両方を同時に使えます。詳細は<code>docs/BTL_OSC_Documentation.md</code>参照。
                 </p>
+                <p>
+                  ホストに<code>broadcast</code>と書くと、Pro DJ Linkネットワーク全体へブロードキャストします
+                  (受信側のIPを指定しなくても、同じネットワーク上のStreamMix Displayならどれでも受信可能。
+                  StreamMix Display側の「受信ホスト」を「すべてのインターフェース(0.0.0.0)」にしておくこと)。
+                </p>
                 <table>
                   <tr><th>名前</th><th>ホスト</th><th>ポート</th></tr>
                   $streamMixDestinationRows

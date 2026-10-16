@@ -8,6 +8,15 @@ import java.io.File
 data class DestinationConfig(val name: String, val host: String, val port: Int)
 
 /**
+ * 配信先のhostにこの値を指定すると、起動時にPro DJ Link側NICのブロードキャストアドレス
+ * (例: 192.168.50.255)に置き換えて送信する。
+ */
+const val BROADCAST_HOST = "broadcast"
+
+/** StreamMix Displayのデフォルト受信ポート(docs/BTL_OSC_Documentation.md)へのブロードキャスト。 */
+val DEFAULT_STREAM_MIX_DESTINATIONS = listOf(DestinationConfig("StreamMix (ブロードキャスト)", BROADCAST_HOST, 8000))
+
+/**
  * OPUS-QUAD利用時、USBスロット(1〜3)に紐付けるメタデータアーカイブファイルの設定。
  * アーカイブファイル自体はBeat Link Triggerの「File > Archive Metadata」等で別途作成したものを
  * このPCに配置し、そのパスを指定する(アーカイブ生成はこのプロジェクトでは行わない)。
@@ -35,8 +44,12 @@ data class Config(
      * 外部ソフト「StreamMix Display」互換のOSCスキーマ(`/deck/{n}/...`)での配信先。
      * 既存の`destinations`(独自スキーマ`/blt/deck/{n}/...`)とは別経路で、両方を同時に使える。
      * 詳細は docs/BTL_OSC_Documentation.md 参照。
+     *
+     * 初期設定はPro DJ Linkネットワーク全体へのブロードキャスト(host=[BROADCAST_HOST])。
+     * VJ側のMac/PCのIPを知らなくても、同じネットワーク上のStreamMix Displayならどれでも受信できる
+     * (受信側は「受信ホスト」を0.0.0.0にしておく必要がある)。
      */
-    val streamMixDestinations: List<DestinationConfig> = emptyList(),
+    val streamMixDestinations: List<DestinationConfig> = DEFAULT_STREAM_MIX_DESTINATIONS,
     val opusArchives: List<OpusArchiveConfig> = emptyList(),
     /**
      * trueの場合、eth0上に他のDHCPサーバーが存在するかを定期的にプローブし、
@@ -107,7 +120,7 @@ data class Config(
                             val d = arr.getJSONObject(i)
                             DestinationConfig(d.getString("name"), d.getString("host"), d.getInt("port"))
                         }
-                    } ?: emptyList(),
+                    } ?: DEFAULT_STREAM_MIX_DESTINATIONS,
                     opusArchives = json.optJSONArray("opusArchives")?.let { arr ->
                         (0 until arr.length()).map { i ->
                             val o = arr.getJSONObject(i)

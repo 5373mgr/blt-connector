@@ -57,16 +57,18 @@ fun main(args: Array<String>) {
 
     config.destinations.forEach { d ->
         try {
-            sender.addDestination(Destination(d.name, InetAddress.getByName(d.host), d.port))
-            logger.info("OSC配信先を追加: {} ({}:{})", d.name, d.host, d.port)
+            val address = resolveDestinationHost(d.host, outputAddress)
+            sender.addDestination(Destination(d.name, address, d.port))
+            logger.info("OSC配信先を追加: {} ({}:{})", d.name, address.hostAddress, d.port)
         } catch (e: Exception) {
             logger.warn("配信先の追加に失敗しました: {}", d, e)
         }
     }
     config.streamMixDestinations.forEach { d ->
         try {
-            streamMixSender.addDestination(Destination(d.name, InetAddress.getByName(d.host), d.port))
-            logger.info("StreamMix Display配信先を追加: {} ({}:{})", d.name, d.host, d.port)
+            val address = resolveDestinationHost(d.host, outputAddress)
+            streamMixSender.addDestination(Destination(d.name, address, d.port))
+            logger.info("StreamMix Display配信先を追加: {} ({}:{})", d.name, address.hostAddress, d.port)
         } catch (e: Exception) {
             logger.warn("StreamMix Display配信先の追加に失敗しました: {}", d, e)
         }
@@ -184,4 +186,22 @@ fun main(args: Array<String>) {
 private fun resolveInterfaceAddress(name: String): InetAddress? {
     val ni = NetworkInterface.getByName(name) ?: return null
     return ni.inetAddresses.asSequence().firstOrNull { it is Inet4Address }
+}
+
+/**
+ * 配信先hostを解決する。[BROADCAST_HOST]の場合はPro DJ Link側NICのブロードキャストアドレスを返す。
+ * 送信用NIC([outputAddress])が指定されていればそのNIC、なければeth0、それも無ければ
+ * IPv4ブロードキャストを持つ最初の稼働中NICを使い、どれも見つからなければ255.255.255.255にする。
+ */
+private fun resolveDestinationHost(host: String, outputAddress: InetAddress?): InetAddress {
+    if (!host.equals(BROADCAST_HOST, ignoreCase = true)) return InetAddress.getByName(host)
+    fun broadcastOf(ni: NetworkInterface?): InetAddress? =
+        ni?.takeIf { it.isUp && !it.isLoopback }?.interfaceAddresses
+            ?.firstOrNull { it.address is Inet4Address && it.broadcast != null }?.broadcast
+    val candidates = sequence {
+        if (outputAddress != null) yield(NetworkInterface.getByInetAddress(outputAddress))
+        yield(NetworkInterface.getByName("eth0"))
+        yieldAll(NetworkInterface.getNetworkInterfaces().asSequence())
+    }
+    return candidates.firstNotNullOfOrNull { broadcastOf(it) } ?: InetAddress.getByName("255.255.255.255")
 }

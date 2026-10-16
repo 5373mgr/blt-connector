@@ -321,11 +321,9 @@ class OverlayServer(
         if (lastTrackKey[deck.playerNumber] != trackKey) {
             lastTrackKey[deck.playerNumber] = trackKey
             trackVersions.merge(deck.playerNumber, 1, Int::plus)
-            if (deck.artwork != null) {
-                latestArt[deck.playerNumber] = deck.artwork
-            } else {
-                latestArt.remove(deck.playerNumber)
-            }
+            // ジャケットも波形と同様、曲変化の瞬間にはまだ取得できていないことが多い(ArtFinderは
+            // メタデータ取得後に別スレッドで問い合わせる)ため、ここでは無効化だけして下で後から埋める。
+            latestArt.remove(deck.playerNumber)
             // 波形は曲の切り替わり時点でいったん無効化し、下の「未取得なら埋める」処理に
             // 委ねる。曲変化直後はbeat-link側の波形データがまだ届いていないことがあり、
             // その瞬間のtickだけで確定させると次の曲変化まで永久に空のままになるため。
@@ -334,6 +332,9 @@ class OverlayServer(
             latestWaveformDetailObject.remove(deck.playerNumber)
         }
 
+        if (!latestArt.containsKey(deck.playerNumber) && deck.artwork != null) {
+            latestArt[deck.playerNumber] = deck.artwork
+        }
         if (!latestWaveform.containsKey(deck.playerNumber) && deck.waveform != null) {
             latestWaveform[deck.playerNumber] = deck.waveform
         }

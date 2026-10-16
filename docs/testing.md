@@ -138,6 +138,17 @@ Windows + 日本語パス環境でのGradle Testワーカーの既知の問題�
   配線によっては実際のフェーダー状態と一致しないことを実機で確認している。構造的な制約の
   可能性があり、確実な対処法は未確立。
 
+- **他のPro DJ Linkソフトとのプレイヤー番号の衝突(曲情報が空になる)**: TCS ShowKontrol等、
+  CDJのdbserverに問い合わせる別ソフトが同じネットワークにいると、Receiverと同じ空きプレイヤー番号
+  (例: 4番)を名乗って問い合わせが衝突し、曲情報が全項目空のメタデータとして返ってくることを実機で確認した。
+  CDJ-3000だけの構成なら`Config.virtualCdjDeviceNumber`を5か6にすると、Receiverは各CDJ自身の番号を
+  名乗って問い合わせるようになるため衝突しない。BLT本体(beat-link)を同時に動かしている場合も同様の
+  問題が起きうるので、検証中はどちらか一方だけを動かすこと。
+- **OSCの送信先**: CLI版のStreamMix Display配信先は初期設定で`broadcast:8000`(Pro DJ Link側NICの
+  ブロードキャストアドレス、例: 192.168.50.255)。BLT本体の`BTL_OSC.blt`は`localhost:8000`に送る設定のため
+  「同じMacでBLTを動かしていれば送信先指定なしで届く」が、Pi上のCLI版からはlocalhostでは届かない。
+  受信側のStreamMix Displayは「受信ホスト」を0.0.0.0にしておく必要がある。
+
 ## beat-linkのフォーク(XDJ-AZ対応)
 
 本家beat-link 8.0.0はXDJ-AZに対応していないため、フォーク
