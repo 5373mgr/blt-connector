@@ -630,6 +630,29 @@
 
   function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
+  // 要素は中心を軸に回転して表示される(index.htmlも同じ)ため、位置の制限は回転前の矩形ではなく
+  // 回転後に実際に見えている外接矩形で判定する。回転前の矩形で判定すると、例えば横幅100%の波形を
+  // 縦(90度)にした場合に x が 0〜0 に固定され、横に動かせなくなっていた。
+  function rotatedExtentPct(cfg, rect) {
+    const rad = (Number(cfg.rotation) || 0) * Math.PI / 180;
+    const cos = Math.abs(Math.cos(rad)), sin = Math.abs(Math.sin(rad));
+    const wPx = cfg.width / 100 * rect.width, hPx = cfg.height / 100 * rect.height;
+    return {
+      w: (wPx * cos + hPx * sin) / rect.width * 100,
+      h: (wPx * sin + hPx * cos) / rect.height * 100,
+    };
+  }
+
+  // 見えている範囲がキャンバス内に収まるよう、中心位置で制限する。キャンバスより大きい場合は
+  // はみ出した分だけ動かせるようにする(どちらの端も画面外に出せない範囲)。
+  function clampPosition(cfg, x, y, rect) {
+    const ext = rotatedExtentPct(cfg, rect);
+    const clampCenter = (c, size) => clamp(c, Math.min(size / 2, 100 - size / 2), Math.max(size / 2, 100 - size / 2));
+    const cx = clampCenter(x + cfg.width / 2, ext.w);
+    const cy = clampCenter(y + cfg.height / 2, ext.h);
+    return { x: cx - cfg.width / 2, y: cy - cfg.height / 2 };
+  }
+
   function roleOptionsHtml(selected) {
     return ROLE_OPTIONS.map((r) => `<option value="${r.value}"${r.value === selected ? " selected" : ""}>${r.label}</option>`).join("");
   }
@@ -749,8 +772,9 @@
       const cfg = findElement(id);
       const dxPct = ((e.clientX - startX) / rect.width) * 100;
       const dyPct = ((e.clientY - startY) / rect.height) * 100;
-      cfg.x = clamp(startLeft + dxPct, 0, 100 - cfg.width);
-      cfg.y = clamp(startTop + dyPct, 0, 100 - cfg.height);
+      const pos = clampPosition(cfg, startLeft + dxPct, startTop + dyPct, rect);
+      cfg.x = pos.x;
+      cfg.y = pos.y;
       applyBoxStyle(id);
     });
     box.addEventListener("pointerup", (e) => {
@@ -765,7 +789,7 @@
     let resizing = false;
     let moved = false;
     let preResizeSnapshot = null;
-    let startX = 0, startY = 0, startWidth = 0, startHeight = 0;
+    let startX = 0, startY = 0, startWidth = 0, startHeight = 0, startCx = 0, startCy = 0;
     handle.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
       resizing = true;
@@ -777,16 +801,36 @@
       startY = e.clientY;
       startWidth = cfg.width;
       startHeight = cfg.height;
+      startCx = cfg.x + cfg.width / 2;
+      startCy = cfg.y + cfg.height / 2;
     });
     handle.addEventListener("pointermove", (e) => {
       if (!resizing) return;
       moved = true;
       const rect = canvasEl().getBoundingClientRect();
       const cfg = findElement(id);
-      const dxPct = ((e.clientX - startX) / rect.width) * 100;
-      const dyPct = ((e.clientY - startY) / rect.height) * 100;
-      cfg.width = clamp(startWidth + dxPct, 3, 100 - cfg.x);
-      cfg.height = clamp(startHeight + dyPct, 3, 100 - cfg.y);
+      const rotation = Number(cfg.rotation) || 0;
+      if (rotation === 0) {
+        const dxPct = ((e.clientX - startX) / rect.width) * 100;
+        const dyPct = ((e.clientY - startY) / rect.height) * 100;
+        cfg.width = clamp(startWidth + dxPct, 3, 100 - cfg.x);
+        cfg.height = clamp(startHeight + dyPct, 3, 100 - cfg.y);
+      } else {
+        // 回転中は、マウスの移動量を要素自身の向き(回転前の座標系)に直してから幅・高さに反映する
+        // (縦にした波形で、ハンドルを下に引くと波形が縦に伸びるように)。
+        const rad = rotation * Math.PI / 180;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        const localDx = dx * Math.cos(rad) + dy * Math.sin(rad);
+        const localDy = -dx * Math.sin(rad) + dy * Math.cos(rad);
+        const maxW = 100 * Math.max(rect.width, rect.height) / rect.width;
+        const maxH = 100 * Math.max(rect.width, rect.height) / rect.height;
+        cfg.width = clamp(startWidth + localDx / rect.width * 100, 3, maxW);
+        cfg.height = clamp(startHeight + localDy / rect.height * 100, 3, maxH);
+        // 回転は中心基準なので、中心を固定したまま伸縮させる(左上基準だと見た目の位置がずれていく)
+        const pos = clampPosition(cfg, startCx - cfg.width / 2, startCy - cfg.height / 2, rect);
+        cfg.x = pos.x;
+        cfg.y = pos.y;
+      }
       applyBoxStyle(id);
     });
     handle.addEventListener("pointerup", (e) => {
