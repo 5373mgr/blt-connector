@@ -1,10 +1,13 @@
 package bltconnector.core.receiver
 
+import org.deepsymmetry.beatlink.BeatFinder
+import org.deepsymmetry.beatlink.BeatListener
 import org.deepsymmetry.beatlink.CdjStatus
 import org.deepsymmetry.beatlink.DeviceFinder
 import org.deepsymmetry.beatlink.Util
 import org.deepsymmetry.beatlink.VirtualCdj
 import org.deepsymmetry.beatlink.data.ArtFinder
+import org.deepsymmetry.beatlink.data.BeatGridFinder
 import org.deepsymmetry.beatlink.data.DataReference
 import org.deepsymmetry.beatlink.data.MetadataFinder
 import org.deepsymmetry.beatlink.data.OpusProvider
@@ -100,6 +103,17 @@ data class DeckSnapshot(
 )
 
 /**
+ * CDJのビートパケット1回分。[beatNumber]はトラック先頭からの絶対ビート番号、
+ * [beatWithinBar]は小節内の位置(1〜4)、[bpm]はピッチ反映済みの実効BPM。
+ */
+data class BeatEvent(
+    val playerNumber: Int,
+    val bpm: Double,
+    val beatNumber: Int,
+    val beatWithinBar: Int,
+)
+
+/**
  * Pro DJ Linkを唯一listenするReceiver。
  * BLT本体は使わず、beat-linkライブラリを直接組み込んで最小限の情報だけを取得する。
  */
@@ -112,6 +126,50 @@ class Receiver {
     private val timeFinder = TimeFinder.getInstance()
     private val waveformFinder = WaveformFinder.getInstance()
     private val artFinder = ArtFinder.getInstance()
+
+    private val beatListeners = java.util.concurrent.CopyOnWriteArrayList<(BeatEvent) -> Unit>()
+
+    /**
+     * CDJのビートパケットを受けた瞬間に呼ばれるリスナーを登録する。[pollDeck]は呼び出し側の
+     * 定期ポーリング(100ms間隔)でしか状態を取れず、ビートが最大でその分(実測で中央値94ms、
+     * 最大149ms)遅れて届いていたため、ビートに同期させたい送信はこちらを使う。
+     * リスナーはbeat-linkの受信スレッドで呼ばれるので、重い処理はしないこと。
+     */
+    fun addBeatListener(listener: (BeatEvent) -> Unit) {
+        beatListeners.add(listener)
+    }
+
+    private val beatListener = BeatListener { beat ->
+        val player = beat.deviceNumber
+        if (player !in 1..4 || beatListeners.isEmpty() || !started) return@BeatListener
+        try {
+            beatListeners.forEach { it(BeatEvent(player, beat.effectiveTempo, beatNumberAt(player, beat.beatWithinBar), beat.beatWithinBar)) }
+        } catch (e: Exception) {
+            logger.warn("ビートの通知中にエラーが発生しました", e)
+        }
+    }
+
+    /**
+     * ビートパケット自体にはトラック先頭からのビート番号が含まれないため、TimeFinderの
+     * 再生位置をビートグリッドに当てて求める。グリッドが無い場合は直近のCdjStatusの値を使う
+     * (CdjStatusは約200ms間隔なので、小節内位置がずれていれば1つ先のビートとみなす)。
+     */
+    private fun beatNumberAt(player: Int, beatWithinBar: Int): Int {
+        val grid = try { BeatGridFinder.getInstance().getLatestBeatGridFor(player) } catch (e: Exception) { null }
+        val positionMs = timeFinder.getTimeFor(player)
+        if (grid != null && positionMs >= 0) {
+            // ビートパケットはビートの瞬間に届くため、補間位置がわずかに手前でも次のビートを拾えるよう少し進めて引く
+            val beat = grid.findBeatAtTime(positionMs + 20)
+            if (beat > 0) return beat
+        }
+        val status = virtualCdj.getLatestStatusFor(player) as? CdjStatus ?: return 0
+        return if (status.beatWithinBar == beatWithinBar) status.beatNumber else status.beatNumber + 1
+    }
+
+    init {
+        // BeatFinderのリスナーは停止・再起動をまたいで保持されるため、一度だけ登録する
+        BeatFinder.getInstance().addBeatListener(beatListener)
+    }
 
     @Volatile private var shouldRun = false
     /** metadataFinder等のサブコンポーネントまで含めて起動が完了したか。pollDeck()のレース防止用。 */

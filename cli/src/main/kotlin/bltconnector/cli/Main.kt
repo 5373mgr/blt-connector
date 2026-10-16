@@ -112,6 +112,9 @@ fun main(args: Array<String>) {
         logger.info("VirtualCdjのプレイヤー番号を{}に固定します(実機CDJとの番号衝突回避)", config.virtualCdjDeviceNumber)
     }
 
+    // ビートはポーリングを待たずに即座に送る(BLTの"Beat"式相当)
+    receiver.addBeatListener { streamMixSender.sendBeat(it.playerNumber, it.bpm, it.beatNumber, it.beatWithinBar) }
+
     Thread({
         logger.info("Receiver starting; waiting for Pro DJ Link devices...")
         receiver.start(waveformStyle, config.virtualCdjDeviceNumber)

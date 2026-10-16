@@ -149,6 +149,11 @@ Windows + 日本語パス環境でのGradle Testワーカーの既知の問題�
   「同じMacでBLTを動かしていれば送信先指定なしで届く」が、Pi上のCLI版からはlocalhostでは届かない。
   受信側のStreamMix Displayは「受信ホスト」を0.0.0.0にしておく必要がある。
 
+- **OSC(StreamMix)のビート遅延**: 当初はCLIの100ms間隔のポーリングでしかOSCを送っておらず、
+  CDJのビートパケットからOSC送出まで実測で中央値94ms・最大149ms遅れていた。BLTの"Beat"式と同様に
+  ビートパケット受信時に`bpm`/`beat`/`beatWithinBar`を即送するようにし、中央値2.9ms・p90 3.9msになった
+  (計測はPi上でeth0をキャプチャし、ポート50001のビートパケットとポート8000のOSCの時刻差を取る)。
+
 ## beat-linkのフォーク(XDJ-AZ対応)
 
 本家beat-link 8.0.0はXDJ-AZに対応していないため、フォーク

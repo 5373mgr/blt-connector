@@ -29,6 +29,7 @@ class StreamMixSender(private val localBindAddress: InetAddress? = null) {
     private val ports = mutableMapOf<Destination, OSCPortOut>()
     private val lastState = mutableMapOf<Pair<Destination, Int>, State>()
 
+    @Synchronized
     fun addDestination(destination: Destination) {
         if (ports.containsKey(destination)) return
         val remote = InetSocketAddress(destination.address, destination.port)
@@ -39,6 +40,7 @@ class StreamMixSender(private val localBindAddress: InetAddress? = null) {
         }
     }
 
+    @Synchronized
     fun removeDestination(destination: Destination) {
         ports.remove(destination)?.close()
         lastState.keys.removeAll { it.first == destination }
@@ -99,7 +101,28 @@ class StreamMixSender(private val localBindAddress: InetAddress? = null) {
         hasCues = deck.cues.isNotEmpty(),
     )
 
+    /**
+     * 実機BLTの"Beat"式に相当: ビートの瞬間に`bpm`/`beat`/`beatWithinBar`を即座に送る。
+     * [update]は100ms間隔のポーリングから呼ばれるため、これが無いとビートが最大150ms程度遅れていた。
+     * 直後の[update]でもTracked一括送信にビート系が重複して乗るが、これも実機と同じ挙動。
+     */
+    @Synchronized
+    fun sendBeat(playerNumber: Int, bpm: Double, beatNumber: Int, beatWithinBar: Int) {
+        val base = "/deck/$playerNumber"
+        ports.forEach { (destination, port) ->
+            try {
+                port.send(OSCMessage("$base/bpm", listOf(bpm.toFloat())))
+                port.send(OSCMessage("$base/beat", listOf(beatNumber)))
+                port.send(OSCMessage("$base/beatWithinBar", listOf(beatWithinBar)))
+            } catch (e: Exception) {
+                logger.warn("failed to send StreamMix OSC beat to {}", destination, e)
+            }
+        }
+    }
+
     /** デッキ1台分の最新状態を全宛先に配信する。前回送信時から状態が変わった宛先にのみ送る。 */
+    // OSCPortOutは送信バッファを共有しておりスレッドセーフではないため、sendBeat(ビート受信スレッド)と排他にする
+    @Synchronized
     fun update(deck: DeckSnapshot) {
         val base = "/deck/${deck.playerNumber}"
         val newState = stateOf(deck)
@@ -154,6 +177,7 @@ class StreamMixSender(private val localBindAddress: InetAddress? = null) {
         messages.forEach { port.send(it) }
     }
 
+    @Synchronized
     fun close() {
         ports.values.forEach { it.close() }
         ports.clear()
